@@ -32,15 +32,9 @@ export function useSubjects() {
   return useQuery({
     queryKey: ["subjects"],
     queryFn: async () => {
-      const response = await fetch('/api/subjects', {
-        credentials: 'include',
-      });
-      
-      if (!response.ok) {
-        throw new Error('Failed to fetch subjects');
-      }
-      
-      return response.json();
+      const { data, error } = await supabase.from("subjects").select("*");
+      if (error) throw new Error("Failed to fetch subjects");
+      return (data || []).map(mapDbRowToSubject);
     },
   });
 }

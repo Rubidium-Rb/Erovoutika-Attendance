@@ -23,18 +23,13 @@ export function useUsers(role?: "student" | "teacher" | "superadmin") {
   return useQuery({
     queryKey,
     queryFn: async () => {
-      const params = new URLSearchParams();
-      if (role) params.append('role', role);
-      
-      const response = await fetch(`/api/users/list?${params}`, {
-        credentials: 'include',
-      });
-      
-      if (!response.ok) {
-        throw new Error('Failed to fetch users');
+      let query = supabase.from("users").select("*");
+      if (role) {
+        query = query.eq("role", role);
       }
-      
-      return response.json();
+      const { data, error } = await query;
+      if (error) throw new Error("Failed to fetch users");
+      return (data || []).map(mapDbRowToUser);
     },
   });
 }
@@ -45,21 +40,26 @@ export function useCreateUser() {
 
   return useMutation({
     mutationFn: async (data: CreateUserRequest) => {
-      const response = await fetch('/api/users/create', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-        body: JSON.stringify(data),
-      });
+      // Map camelCase to snake_case for database
+      const dbData = {
+        username: data.username,
+        email: data.email,
+        password: data.password,
+        full_name: data.fullName,
+        role: data.role,
+        profile_picture: data.profilePicture,
+      };
       
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.message || 'Failed to create user');
+      const { data: result, error } = await supabase
+        .from("users")
+        .insert(dbData)
+        .select()
+        .single();
+      
+      if (error) {
+        throw new Error(error.message || "Failed to create user");
       }
-      
-      return response.json();
+      return mapDbRowToUser(result);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["users"] });
