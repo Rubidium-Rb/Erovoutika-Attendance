@@ -5,7 +5,6 @@ import { storage } from "./storage";
 import { api } from "@shared/routes";
 import { z } from "zod";
 import passport from "passport";
-import { sendPasswordResetEmail } from "./email";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -46,37 +45,6 @@ export async function registerRoutes(
     const user = req.user as any;
     const { password, ...safeUser } = user;
     res.json(safeUser);
-  });
-
-  // === Password Reset Email ===
-  app.post('/api/send-reset-email', async (req, res) => {
-    try {
-      const { email, resetUrl, name, systemName, schoolName } = req.body;
-
-      if (!email || !resetUrl || !name) {
-        return res.status(400).json({ 
-          success: false, 
-          error: 'Missing required fields: email, resetUrl, name' 
-        });
-      }
-
-      const result = await sendPasswordResetEmail({
-        to: email,
-        userName: name,
-        resetUrl,
-        systemName: systemName || 'Attendance Monitoring System',
-        schoolName: schoolName || 'Your School',
-      });
-
-      if (result.success) {
-        res.json({ success: true, message: 'Password reset email sent' });
-      } else {
-        res.status(500).json({ success: false, error: result.error });
-      }
-    } catch (error) {
-      console.error('Send reset email error:', error);
-      res.status(500).json({ success: false, error: 'Failed to send email' });
-    }
   });
 
   // === User Management ===

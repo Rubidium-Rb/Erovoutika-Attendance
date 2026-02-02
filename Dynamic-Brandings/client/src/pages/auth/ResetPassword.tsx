@@ -3,7 +3,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useSystemSettings } from "@/hooks/use-system-settings";
-import { Link, useLocation, useSearch } from "wouter";
+import { Link, useLocation } from "wouter";
 import { supabase } from "@/lib/supabase";
 import { 
   GraduationCap, 
@@ -67,15 +67,12 @@ export default function ResetPassword() {
   const { settings } = useSystemSettings();
   const { toast } = useToast();
   const [, setLocation] = useLocation();
-  const searchString = useSearch();
-  const searchParams = new URLSearchParams(searchString);
-  const token = searchParams.get("token");
   
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isValidating, setIsValidating] = useState(true);
   const [isValidToken, setIsValidToken] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
-  const [tokenData, setTokenData] = useState<{ userId: number; userName: string } | null>(null);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
@@ -90,87 +87,103 @@ export default function ResetPassword() {
   const watchedPassword = form.watch("password");
   const passwordStrength = calculatePasswordStrength(watchedPassword || "");
 
-  // Validate token on mount
+  // Listen for Supabase auth events (when user clicks reset link from email)
   useEffect(() => {
-    async function validateToken() {
-      if (!token) {
-        setIsValidating(false);
+    // Check if we have hash params from Supabase (access_token, etc.)
+    const hashParams = new URLSearchParams(window.location.hash.substring(1));
+    const accessToken = hashParams.get("access_token");
+    const type = hashParams.get("type");
+    
+    // Also check URL params (Supabase may use either)
+    const urlParams = new URLSearchParams(window.location.search);
+    const errorCode = urlParams.get("error_code");
+    const errorDescription = urlParams.get("error_description");
+
+    async function handlePasswordRecovery() {
+      // If there's an error in URL params, show invalid token
+      if (errorCode) {
+        console.error("Supabase auth error:", errorCode, errorDescription);
         setIsValidToken(false);
+        setIsValidating(false);
         return;
       }
 
-      try {
-        // Check if token exists and is valid
-        const { data: tokenRecord, error } = await supabase
-          .from("password_reset_tokens")
-          .select("id, user_id, expires_at, used_at")
-          .eq("token", token)
-          .single();
-
-        if (error || !tokenRecord) {
+      // If we have access_token and type is recovery, the session is already set
+      if (accessToken && type === "recovery") {
+        // Get current session to verify
+        const { data: { session }, error } = await supabase.auth.getSession();
+        
+        if (error || !session) {
+          console.error("Failed to get session:", error);
           setIsValidToken(false);
           setIsValidating(false);
           return;
         }
 
-        // Check if token is expired
-        if (new Date(tokenRecord.expires_at) < new Date()) {
-          setIsValidToken(false);
-          setIsValidating(false);
-          return;
-        }
-
-        // Check if token is already used
-        if (tokenRecord.used_at) {
-          setIsValidToken(false);
-          setIsValidating(false);
-          return;
-        }
-
-        // Get user info
-        const { data: userData } = await supabase
-          .from("users")
-          .select("id, full_name")
-          .eq("id", tokenRecord.user_id)
-          .single();
-
-        if (userData) {
-          setTokenData({ userId: userData.id, userName: userData.full_name });
-        }
-
+        setUserEmail(session.user?.email || null);
         setIsValidToken(true);
-      } catch (err) {
-        console.error("Token validation error:", err);
-        setIsValidToken(false);
-      } finally {
         setIsValidating(false);
+        return;
       }
+
+      // Check if there's an existing session from recovery
+      const { data: { session } } = await supabase.auth.getSession();
+      
+      if (session) {
+        // There's an active session, allow password reset
+        setUserEmail(session.user?.email || null);
+        setIsValidToken(true);
+        setIsValidating(false);
+        return;
+      }
+
+      // Listen for auth state changes
+      const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+        if (event === "PASSWORD_RECOVERY" && session) {
+          setUserEmail(session.user?.email || null);
+          setIsValidToken(true);
+          setIsValidating(false);
+        }
+      });
+
+      // If no session and no recovery event after a short delay, invalid
+      setTimeout(() => {
+        setIsValidating(false);
+        // If still not valid after checking, mark as invalid
+      }, 2000);
+
+      return () => {
+        subscription.unsubscribe();
+      };
     }
 
-    validateToken();
-  }, [token]);
+    handlePasswordRecovery();
+  }, []);
 
   const onSubmit = async (data: ResetPasswordFormValues) => {
-    if (!token || !tokenData) return;
-    
     setIsSubmitting(true);
     
     try {
-      // Update user password
-      const { error: updateError } = await supabase
-        .from("users")
-        .update({ password: data.password })
-        .eq("id", tokenData.userId);
+      // Use Supabase's built-in updateUser to change password
+      const { error } = await supabase.auth.updateUser({
+        password: data.password,
+      });
 
-      if (updateError) {
-        throw new Error("Failed to update password");
+      if (error) {
+        throw error;
       }
 
-      // Mark token as used
-      await supabase
-        .from("password_reset_tokens")
-        .update({ used_at: new Date().toISOString() })
-        .eq("token", token);
+      // Also update the password in our users table if needed
+      // (for apps that store passwords separately)
+      if (userEmail) {
+        await supabase
+          .from("users")
+          .update({ password: data.password })
+          .eq("email", userEmail.toLowerCase());
+      }
+
+      // Sign out after password change for security
+      await supabase.auth.signOut();
 
       setIsSuccess(true);
       
@@ -179,11 +192,11 @@ export default function ResetPassword() {
         description: "Your password has been updated. You can now log in with your new password.",
       });
       
-    } catch (error) {
+    } catch (error: any) {
       console.error("Reset password error:", error);
       toast({
         title: "Error",
-        description: "Failed to reset password. Please try again.",
+        description: error.message || "Failed to reset password. Please try again.",
         variant: "destructive",
       });
     } finally {
@@ -308,7 +321,7 @@ export default function ResetPassword() {
             Reset Your Password
           </h1>
           <p className="text-muted-foreground">
-            {tokenData?.userName ? `Hi ${tokenData.userName.split(' ')[0]}, create` : "Create"} a new password for your account.
+            {userEmail ? `Resetting password for ${userEmail}` : "Create a new password for your account."}
           </p>
         </div>
 
