@@ -11,7 +11,9 @@ import {
   Mail, 
   ArrowLeft,
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
+  Copy,
+  ExternalLink
 } from "lucide-react";
 import {
   Form,
@@ -33,12 +35,20 @@ const forgotPasswordSchema = z.object({
 
 type ForgotPasswordFormValues = z.infer<typeof forgotPasswordSchema>;
 
+// Generate a secure random token
+function generateToken(): string {
+  const array = new Uint8Array(32);
+  crypto.getRandomValues(array);
+  return Array.from(array, byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
 export default function ForgotPassword() {
   const { settings } = useSystemSettings();
   const { toast } = useToast();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [submittedEmail, setSubmittedEmail] = useState("");
+  const [resetLink, setResetLink] = useState<string | null>(null);
 
   const form = useForm<ForgotPasswordFormValues>({
     resolver: zodResolver(forgotPasswordSchema),
@@ -47,38 +57,76 @@ export default function ForgotPassword() {
     },
   });
 
+  const copyToClipboard = async () => {
+    if (resetLink) {
+      await navigator.clipboard.writeText(resetLink);
+      toast({
+        title: "Copied!",
+        description: "Reset link copied to clipboard.",
+      });
+    }
+  };
+
   const onSubmit = async (data: ForgotPasswordFormValues) => {
     setIsSubmitting(true);
+    setResetLink(null);
     
     try {
-      // First check if user exists in our users table (optional - for better UX)
-      const { data: userData } = await supabase
+      // Check if user exists in our users table
+      const { data: userData, error: userError } = await supabase
         .from("users")
-        .select("id, email")
+        .select("id, email, full_name")
         .eq("email", data.email.toLowerCase())
         .single();
 
-      // Use Supabase's built-in password reset functionality
-      // This sends an email via Supabase's transactional email service
-      const redirectUrl = `${window.location.origin}/reset-password`;
-      
-      const { error } = await supabase.auth.resetPasswordForEmail(data.email.toLowerCase(), {
-        redirectTo: redirectUrl,
-      });
-
-      if (error) {
-        // Don't expose whether the email exists or not for security
-        console.error("Supabase password reset error:", error);
-        // Still show success to prevent email enumeration
+      if (userError || !userData) {
+        // Don't reveal if email exists - show success anyway for security
+        setSubmittedEmail(data.email);
+        setIsSubmitted(true);
+        toast({
+          title: "Check your email",
+          description: "If an account exists, you'll receive instructions shortly.",
+        });
+        return;
       }
 
-      // Always show success message (prevents email enumeration attacks)
+      // Generate a secure token
+      const token = generateToken();
+      const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour from now
+
+      // Delete any existing unused tokens for this user
+      await supabase
+        .from("password_reset_tokens")
+        .delete()
+        .eq("user_id", userData.id)
+        .is("used_at", null);
+
+      // Store the token in the database
+      const { error: tokenError } = await supabase
+        .from("password_reset_tokens")
+        .insert({
+          user_id: userData.id,
+          token: token,
+          expires_at: expiresAt.toISOString(),
+        });
+
+      if (tokenError) {
+        console.error("Token creation error:", tokenError);
+        throw new Error("Failed to create reset token");
+      }
+
+      // Generate the reset URL
+      const resetUrl = `${window.location.origin}/reset-password?token=${token}`;
+      
+      // For prototype: Show the link directly (since we can't send emails)
+      // In production, you would send this via email
+      setResetLink(resetUrl);
       setSubmittedEmail(data.email);
       setIsSubmitted(true);
       
       toast({
-        title: "Check your email",
-        description: "If an account exists, you'll receive a password reset link shortly. Check your spam folder if you don't see it.",
+        title: "Reset link generated!",
+        description: "Since this is a prototype, the reset link is shown below.",
       });
       
     } catch (error) {
@@ -118,23 +166,67 @@ export default function ForgotPassword() {
             {isSubmitted ? (
               // Success State
               <div className="space-y-6">
-                <Alert className="border-green-200 bg-green-50">
-                  <CheckCircle2 className="h-4 w-4 text-green-600" />
-                  <AlertTitle className="text-green-800">Check your email</AlertTitle>
-                  <AlertDescription className="text-green-700">
-                    If an account exists for <span className="font-medium">{submittedEmail}</span>, 
-                    you will receive a password reset link shortly.
-                  </AlertDescription>
-                </Alert>
+                {resetLink ? (
+                  // Prototype mode: Show the reset link directly
+                  <>
+                    <Alert className="border-blue-200 bg-blue-50">
+                      <CheckCircle2 className="h-4 w-4 text-blue-600" />
+                      <AlertTitle className="text-blue-800">Reset Link Generated!</AlertTitle>
+                      <AlertDescription className="text-blue-700">
+                        Since this is a prototype without email service, your reset link is shown below.
+                        In production, this would be sent to <span className="font-medium">{submittedEmail}</span>.
+                      </AlertDescription>
+                    </Alert>
+
+                    <div className="space-y-3">
+                      <p className="text-sm font-medium text-gray-700">Your password reset link:</p>
+                      <div className="flex items-center gap-2">
+                        <Input 
+                          readOnly 
+                          value={resetLink} 
+                          className="text-xs font-mono bg-gray-50"
+                        />
+                        <Button 
+                          type="button" 
+                          variant="outline" 
+                          size="icon"
+                          onClick={copyToClipboard}
+                          title="Copy to clipboard"
+                        >
+                          <Copy className="h-4 w-4" />
+                        </Button>
+                      </div>
+                      <div className="flex gap-2">
+                        <Link href={`/reset-password?token=${resetLink.split('token=')[1]}`} className="flex-1">
+                          <Button className="w-full">
+                            <ExternalLink className="mr-2 h-4 w-4" />
+                            Go to Reset Password
+                          </Button>
+                        </Link>
+                      </div>
+                      <p className="text-xs text-muted-foreground text-center">
+                        This link expires in 1 hour.
+                      </p>
+                    </div>
+                  </>
+                ) : (
+                  // Email not found (but we don't tell them that for security)
+                  <Alert className="border-green-200 bg-green-50">
+                    <CheckCircle2 className="h-4 w-4 text-green-600" />
+                    <AlertTitle className="text-green-800">Check your email</AlertTitle>
+                    <AlertDescription className="text-green-700">
+                      If an account exists for <span className="font-medium">{submittedEmail}</span>, 
+                      you will receive a password reset link shortly.
+                    </AlertDescription>
+                  </Alert>
+                )}
 
                 <div className="text-center space-y-4">
-                  <p className="text-sm text-muted-foreground">
-                    Didn't receive the email? Check your spam folder or
-                  </p>
                   <Button 
                     variant="outline" 
                     onClick={() => {
                       setIsSubmitted(false);
+                      setResetLink(null);
                       form.reset();
                     }}
                   >
