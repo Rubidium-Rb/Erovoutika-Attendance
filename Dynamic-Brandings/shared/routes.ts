@@ -29,7 +29,7 @@ export const api = {
       method: 'POST' as const,
       path: '/api/login',
       input: z.object({
-        username: z.string(),
+        idNumber: z.string(),
         password: z.string(),
         role: z.enum(["student", "teacher", "superadmin"]).optional(),
       }),

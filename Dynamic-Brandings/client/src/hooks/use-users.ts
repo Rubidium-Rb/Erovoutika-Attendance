@@ -7,7 +7,7 @@ import { supabase } from "@/lib/supabase";
 function mapDbRowToUser(row: any): User {
   return {
     id: row.id,
-    username: row.username,
+    idNumber: row.id_number,
     email: row.email,
     password: row.password,
     fullName: row.full_name,
@@ -42,7 +42,7 @@ export function useCreateUser() {
     mutationFn: async (data: CreateUserRequest) => {
       // Map camelCase to snake_case for database
       const dbData = {
-        username: data.username,
+        id_number: data.idNumber,
         email: data.email,
         password: data.password,
         full_name: data.fullName,
@@ -103,7 +103,7 @@ export function useUpdateUser() {
     mutationFn: async ({ id, data }: { id: number; data: Partial<CreateUserRequest> }) => {
       // Map camelCase to snake_case for database
       const dbData: Record<string, any> = {};
-      if (data.username !== undefined) dbData.username = data.username;
+      if (data.idNumber !== undefined) dbData.id_number = data.idNumber;
       if (data.email !== undefined) dbData.email = data.email;
       if (data.password !== undefined) dbData.password = data.password;
       if (data.fullName !== undefined) dbData.full_name = data.fullName;

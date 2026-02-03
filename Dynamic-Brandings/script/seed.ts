@@ -46,24 +46,24 @@ async function seed() {
   // Create admin
   console.log("👤 Creating admin user...");
   const [admin] = await db.insert(users).values({
-    username: "admin",
+    idNumber: "admin",
     email: "admin@school.edu",
     password: "admin123",
     fullName: "System Administrator",
     role: "superadmin",
   }).returning();
-  console.log(`   Created admin: ${admin.username}`);
+  console.log(`   Created admin: ${admin.idNumber}`);
 
   // Create teacher
   console.log("👨‍🏫 Creating teacher user...");
   const [teacher] = await db.insert(users).values({
-    username: "teacher1",
+    idNumber: "teacher1",
     email: "teacher@school.edu",
     password: "teacher123",
     fullName: "Prof. Roberto Dela Cruz",
     role: "teacher",
   }).returning();
-  console.log(`   Created teacher: ${teacher.username}`);
+  console.log(`   Created teacher: ${teacher.idNumber}`);
 
   // Create 20 students
   console.log("🎓 Creating 20 student users...");
@@ -74,14 +74,14 @@ async function seed() {
     const studentId = `2024${String(i).padStart(4, "0")}`;
     
     const [student] = await db.insert(users).values({
-      username: studentId,
+      idNumber: studentId,
       email: `${firstName.toLowerCase()}.${lastName.toLowerCase()}@student.school.edu`,
       password: "student123",
       fullName: `${firstName} ${lastName}`,
       role: "student",
     }).returning();
     studentUsers.push(student);
-    console.log(`   Created student: ${student.username} - ${student.fullName}`);
+    console.log(`   Created student: ${student.idNumber} - ${student.fullName}`);
   }
 
   // Create subjects assigned to the teacher

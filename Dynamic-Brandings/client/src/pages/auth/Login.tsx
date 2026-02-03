@@ -28,7 +28,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 
 // Using z.enum directly for type safety with the backend schema
 const loginSchema = z.object({
-  identifier: z.string().min(1, "Email or username is required"),
+  identifier: z.string().min(1, "Email or ID number is required"),
   password: z.string().min(1, "Password is required"),
   role: z.enum(["student", "teacher", "superadmin"]),
 });
@@ -102,11 +102,11 @@ export default function Login() {
                   name="identifier"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Email or Username</FormLabel>
+                      <FormLabel>Email or ID Number</FormLabel>
                       <FormControl>
                         <div className="relative">
                           <User className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                          <Input className="pl-9 h-11" placeholder="Email or Username" {...field} />
+                          <Input className="pl-9 h-11" placeholder="Email or ID Number" {...field} />
                         </div>
                       </FormControl>
                       <FormMessage />

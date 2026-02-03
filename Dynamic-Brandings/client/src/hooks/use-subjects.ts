@@ -18,7 +18,7 @@ function mapDbRowToSubject(row: any): Subject {
 function mapDbRowToUser(row: any): User {
   return {
     id: row.id,
-    username: row.username,
+    idNumber: row.id_number,
     email: row.email,
     password: row.password,
     fullName: row.full_name,

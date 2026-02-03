@@ -7,7 +7,7 @@ import { relations } from "drizzle-orm";
 
 export const users = pgTable("users", {
   id: serial("id").primaryKey(),
-  username: text("username").notNull().unique(),
+  idNumber: text("id_number").notNull().unique(),
   email: text("email").notNull().unique(),
   password: text("password").notNull(),
   fullName: text("full_name").notNull(),
@@ -138,7 +138,7 @@ export type InsertSchedule = z.infer<typeof insertScheduleSchema>;
 
 // Request types
 export type LoginRequest = {
-  identifier: string; // email or username
+  identifier: string; // email or ID number
   password: string;
   role: "student" | "teacher" | "superadmin";
 };

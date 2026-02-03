@@ -18,7 +18,7 @@ export async function registerRoutes(
     passport.authenticate("local", (err: any, user: any) => {
       if (err) return next(err);
       if (!user) {
-        return res.status(401).json({ message: "Invalid email/username or password" });
+        return res.status(401).json({ message: "Invalid email/ID number or password" });
       }
       req.logIn(user, (err) => {
         if (err) return next(err);
@@ -60,9 +60,9 @@ export async function registerRoutes(
     // Ideally protected
     try {
       const userData = api.users.create.input.parse(req.body);
-      const existingUser = await storage.getUserByUsername(userData.username);
+      const existingUser = await storage.getUserByIdNumber(userData.idNumber);
       if (existingUser) {
-        return res.status(400).json({ message: "Username already exists" });
+        return res.status(400).json({ message: "ID number already exists" });
       }
       const existingEmail = await storage.getUserByEmail(userData.email);
       if (existingEmail) {
@@ -79,14 +79,14 @@ export async function registerRoutes(
     }
   });
 
-  // Check if username exists
-  app.get('/api/users/check-username', async (req, res) => {
+  // Check if ID number exists
+  app.get('/api/users/check-id-number', async (req, res) => {
     if (!req.isAuthenticated()) return res.sendStatus(401);
-    const username = req.query.username as string;
-    if (!username) {
-      return res.status(400).json({ message: "Username is required" });
+    const idNumber = req.query.idNumber as string;
+    if (!idNumber) {
+      return res.status(400).json({ message: "ID number is required" });
     }
-    const existingUser = await storage.getUserByUsername(username);
+    const existingUser = await storage.getUserByIdNumber(idNumber);
     res.json({ exists: !!existingUser });
   });
 
@@ -95,11 +95,11 @@ export async function registerRoutes(
     const id = parseInt(req.params.id);
     const updates = api.users.update.input.parse(req.body);
 
-    // If updating username, check if it already exists
-    if (updates.username) {
-      const existingUser = await storage.getUserByUsername(updates.username);
+    // If updating ID number, check if it already exists
+    if (updates.idNumber) {
+      const existingUser = await storage.getUserByIdNumber(updates.idNumber);
       if (existingUser && existingUser.id !== id) {
-        return res.status(400).json({ message: "Username already exists" });
+        return res.status(400).json({ message: "ID number already exists" });
       }
     }
 
@@ -379,7 +379,8 @@ async function seedDatabase() {
   if (users.length === 0) {
     // Create Superadmin
     await storage.createUser({
-      username: "admin",
+      idNumber: "admin",
+      email: "admin@school.edu",
       password: "password", // In real app, hash this
       fullName: "System Administrator",
       role: "superadmin"
@@ -387,7 +388,8 @@ async function seedDatabase() {
 
     // Create Teacher
     const teacher = await storage.createUser({
-      username: "teacher",
+      idNumber: "teacher",
+      email: "teacher@school.edu",
       password: "password",
       fullName: "Dr. Jose Rizal",
       role: "teacher"
@@ -395,7 +397,8 @@ async function seedDatabase() {
 
     // Create Student
     const student = await storage.createUser({
-      username: "student",
+      idNumber: "student",
+      email: "student@school.edu",
       password: "password",
       fullName: "Juan Dela Cruz",
       role: "student"
@@ -514,13 +517,14 @@ async function seedStudentsForSubjects() {
 
     for (let i = 0; i < studentNames.length; i++) {
       const name = studentNames[i];
-      const username = `student${i + 2}`; // student2, student3, etc.
+      const idNumber = `student${i + 2}`; // student2, student3, etc.
 
       // Check if student already exists
-      const existing = await storage.getUserByUsername(username);
+      const existing = await storage.getUserByIdNumber(idNumber);
       if (!existing) {
         const student = await storage.createUser({
-          username,
+          idNumber,
+          email: `${idNumber}@school.edu`,
           password: "password",
           fullName: `${name.first} ${name.last}`,
           role: "student"

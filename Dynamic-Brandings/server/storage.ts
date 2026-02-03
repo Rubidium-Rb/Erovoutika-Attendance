@@ -13,7 +13,7 @@ import { eq, and, desc } from "drizzle-orm";
 export interface IStorage {
   // Users
   getUser(id: number): Promise<User | undefined>;
-  getUserByUsername(username: string): Promise<User | undefined>;
+  getUserByIdNumber(idNumber: string): Promise<User | undefined>;
   getUserByEmail(email: string): Promise<User | undefined>;
   getUserByIdentifier(identifier: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
@@ -60,8 +60,8 @@ export class DatabaseStorage implements IStorage {
     return user;
   }
 
-  async getUserByUsername(username: string): Promise<User | undefined> {
-    const [user] = await db.select().from(users).where(eq(users.username, username));
+  async getUserByIdNumber(idNumber: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.idNumber, idNumber));
     return user;
   }
 
@@ -71,10 +71,10 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getUserByIdentifier(identifier: string): Promise<User | undefined> {
-    // Try to find user by email first, then by username
+    // Try to find user by email first, then by ID number
     let user = await this.getUserByEmail(identifier);
     if (!user) {
-      user = await this.getUserByUsername(identifier);
+      user = await this.getUserByIdNumber(identifier);
     }
     return user;
   }

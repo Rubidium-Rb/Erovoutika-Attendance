@@ -28,25 +28,25 @@ export default function Profile() {
     const fileInputRef = useRef<HTMLInputElement>(null);
     const [isUploading, setIsUploading] = useState(false);
 
-    // Username editing state
-    const [isEditingUsername, setIsEditingUsername] = useState(false);
-    const [newUsername, setNewUsername] = useState("");
-    const [usernameError, setUsernameError] = useState("");
-    const [isCheckingUsername, setIsCheckingUsername] = useState(false);
+    // ID Number editing state
+    const [isEditingIdNumber, setIsEditingIdNumber] = useState(false);
+    const [newIdNumber, setNewIdNumber] = useState("");
+    const [idNumberError, setIdNumberError] = useState("");
+    const [isCheckingIdNumber, setIsCheckingIdNumber] = useState(false);
 
-    // Initialize newUsername when user loads or when editing starts
+    // Initialize newIdNumber when user loads or when editing starts
     useEffect(() => {
-        if (user && isEditingUsername) {
-            setNewUsername(user.username);
+        if (user && isEditingIdNumber) {
+            setNewIdNumber(user.idNumber);
         }
-    }, [user, isEditingUsername]);
+    }, [user, isEditingIdNumber]);
 
     const { mutate: updateProfile, isPending } = useMutation({
-        mutationFn: async (data: { profilePicture?: string; username?: string }) => {
+        mutationFn: async (data: { profilePicture?: string; idNumber?: string }) => {
             // Map to snake_case for database
             const dbData: Record<string, any> = {};
             if (data.profilePicture !== undefined) dbData.profile_picture = data.profilePicture;
-            if (data.username !== undefined) dbData.username = data.username;
+            if (data.idNumber !== undefined) dbData.id_number = data.idNumber;
             
             const { error } = await supabase
                 .from("users")
@@ -61,12 +61,12 @@ export default function Profile() {
         onSuccess: (_, variables) => {
             queryClient.invalidateQueries({ queryKey: ["auth-user"] });
             refreshUser?.();
-            if (variables.username) {
+            if (variables.idNumber) {
                 toast({
-                    title: "Username Updated",
-                    description: "Your username has been changed successfully."
+                    title: "ID Number Updated",
+                    description: "Your ID number has been changed successfully."
                 });
-                setIsEditingUsername(false);
+                setIsEditingIdNumber(false);
             } else {
                 toast({
                     title: "Profile Updated",
@@ -83,15 +83,15 @@ export default function Profile() {
         }
     });
 
-    // Check if username already exists
-    const checkUsernameExists = async (username: string): Promise<boolean> => {
-        if (!username || username === user?.username) return false;
+    // Check if ID number already exists
+    const checkIdNumberExists = async (idNumber: string): Promise<boolean> => {
+        if (!idNumber || idNumber === user?.idNumber) return false;
 
         try {
             const { data, error } = await supabase
                 .from("users")
                 .select("id")
-                .eq("username", username)
+                .eq("id_number", idNumber)
                 .maybeSingle();
             
             if (error) return false;
@@ -101,50 +101,50 @@ export default function Profile() {
         }
     };
 
-    const handleUsernameChange = async (value: string) => {
-        setNewUsername(value);
-        setUsernameError("");
+    const handleIdNumberChange = async (value: string) => {
+        setNewIdNumber(value);
+        setIdNumberError("");
 
         // Basic validation
         if (value.length < 3) {
-            setUsernameError("Username must be at least 3 characters");
+            setIdNumberError("ID number must be at least 3 characters");
             return;
         }
 
         if (!/^[a-zA-Z0-9_]+$/.test(value)) {
-            setUsernameError("Username can only contain letters, numbers, and underscores");
+            setIdNumberError("ID number can only contain letters, numbers, and underscores");
             return;
         }
 
         // If same as current, no need to check
-        if (value === user?.username) {
+        if (value === user?.idNumber) {
             return;
         }
 
-        // Check if username exists (debounced would be better, but keeping it simple)
-        setIsCheckingUsername(true);
-        const exists = await checkUsernameExists(value);
-        setIsCheckingUsername(false);
+        // Check if ID number exists (debounced would be better, but keeping it simple)
+        setIsCheckingIdNumber(true);
+        const exists = await checkIdNumberExists(value);
+        setIsCheckingIdNumber(false);
 
         if (exists) {
-            setUsernameError("This username is already taken");
+            setIdNumberError("This ID number is already taken");
         }
     };
 
-    const handleSaveUsername = () => {
-        if (usernameError || !newUsername || newUsername === user?.username) {
-            if (newUsername === user?.username) {
-                setIsEditingUsername(false);
+    const handleSaveIdNumber = () => {
+        if (idNumberError || !newIdNumber || newIdNumber === user?.idNumber) {
+            if (newIdNumber === user?.idNumber) {
+                setIsEditingIdNumber(false);
             }
             return;
         }
-        updateProfile({ username: newUsername });
+        updateProfile({ idNumber: newIdNumber });
     };
 
-    const handleCancelUsernameEdit = () => {
-        setIsEditingUsername(false);
-        setNewUsername(user?.username || "");
-        setUsernameError("");
+    const handleCancelIdNumberEdit = () => {
+        setIsEditingIdNumber(false);
+        setNewIdNumber(user?.idNumber || "");
+        setIdNumberError("");
     };
 
     const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -330,44 +330,44 @@ export default function Profile() {
                             </div>
                         </div>
 
-                        {/* Username - Editable */}
+                        {/* ID Number - Editable */}
                         <div className="flex items-start gap-4">
                             <div className="w-10 h-10 rounded-lg bg-secondary flex items-center justify-center flex-shrink-0">
                                 <Mail className="h-5 w-5 text-secondary-foreground" />
                             </div>
                             <div className="flex-1">
-                                <p className="text-sm text-muted-foreground">Username</p>
-                                {isEditingUsername ? (
+                                <p className="text-sm text-muted-foreground">ID Number</p>
+                                {isEditingIdNumber ? (
                                     <div className="space-y-2 mt-1">
                                         <div className="flex items-center gap-2">
                                             <Input
-                                                value={newUsername}
-                                                onChange={(e) => handleUsernameChange(e.target.value)}
+                                                value={newIdNumber}
+                                                onChange={(e) => handleIdNumberChange(e.target.value)}
                                                 onKeyDown={(e) => {
-                                                    if (e.key === 'Enter' && !usernameError && !isCheckingUsername && newUsername) {
+                                                    if (e.key === 'Enter' && !idNumberError && !isCheckingIdNumber && newIdNumber) {
                                                         e.preventDefault();
-                                                        handleSaveUsername();
+                                                        handleSaveIdNumber();
                                                     }
                                                 }}
-                                                placeholder="Enter new username"
-                                                className={`max-w-xs ${usernameError ? 'border-destructive' : ''}`}
+                                                placeholder="Enter new ID number"
+                                                className={`max-w-xs ${idNumberError ? 'border-destructive' : ''}`}
                                                 disabled={isPending}
                                             />
-                                            {isCheckingUsername && (
+                                            {isCheckingIdNumber && (
                                                 <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
                                             )}
                                         </div>
-                                        {usernameError && (
+                                        {idNumberError && (
                                             <div className="flex items-center gap-1 text-sm text-destructive">
                                                 <AlertCircle className="h-3 w-3" />
-                                                {usernameError}
+                                                {idNumberError}
                                             </div>
                                         )}
                                         <div className="flex gap-2">
                                             <Button
                                                 size="sm"
-                                                onClick={handleSaveUsername}
-                                                disabled={isPending || !!usernameError || isCheckingUsername || !newUsername}
+                                                onClick={handleSaveIdNumber}
+                                                disabled={isPending || !!idNumberError || isCheckingIdNumber || !newIdNumber}
                                             >
                                                 {isPending ? (
                                                     <Loader2 className="h-4 w-4 animate-spin mr-1" />
@@ -379,7 +379,7 @@ export default function Profile() {
                                             <Button
                                                 size="sm"
                                                 variant="ghost"
-                                                onClick={handleCancelUsernameEdit}
+                                                onClick={handleCancelIdNumberEdit}
                                                 disabled={isPending}
                                             >
                                                 <X className="h-4 w-4 mr-1" />
@@ -389,12 +389,12 @@ export default function Profile() {
                                     </div>
                                 ) : (
                                     <div className="flex items-center gap-2">
-                                        <p className="text-lg font-semibold">{user.username}</p>
+                                        <p className="text-lg font-semibold">{user.idNumber}</p>
                                         <Button
                                             variant="ghost"
                                             size="icon"
                                             className="h-7 w-7"
-                                            onClick={() => setIsEditingUsername(true)}
+                                            onClick={() => setIsEditingIdNumber(true)}
                                         >
                                             <Pencil className="h-3 w-3" />
                                         </Button>

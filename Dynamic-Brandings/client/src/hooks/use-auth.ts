@@ -51,27 +51,27 @@ export function useAuth() {
       const { identifier, password } = credentials;
       
       // Query the users table directly via Supabase
-      // Try to find user by email first, then by username
+      // Try to find user by email first, then by ID number
       let { data: userData, error } = await supabase
         .from("users")
         .select("*")
-        .or(`email.eq.${identifier},username.eq.${identifier}`)
+        .or(`email.eq.${identifier},id_number.eq.${identifier}`)
         .single();
 
       if (error || !userData) {
-        throw new Error("Invalid email/username or password");
+        throw new Error("Invalid email/ID number or password");
       }
 
       // Verify password (currently plaintext comparison - matches your existing backend)
       // Note: In production, you should use proper password hashing
       if (userData.password !== password) {
-        throw new Error("Invalid email/username or password");
+        throw new Error("Invalid email/ID number or password");
       }
 
       // Map database columns to User type (handle snake_case to camelCase)
       const user: User = {
         id: userData.id,
-        username: userData.username,
+        idNumber: userData.id_number,
         email: userData.email,
         password: userData.password,
         fullName: userData.full_name,
@@ -125,7 +125,7 @@ export function useAuth() {
       if (userData) {
         const user: User = {
           id: userData.id,
-          username: userData.username,
+          idNumber: userData.id_number,
           email: userData.email,
           password: userData.password,
           fullName: userData.full_name,
