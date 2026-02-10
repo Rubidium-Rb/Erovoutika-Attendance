@@ -57,7 +57,7 @@ export default function ForgotPassword() {
       // First check if user exists in our users table
       const { data: userData, error: userError } = await supabase
         .from("users")
-        .select("id, email, full_name, password")
+        .select("id, email, full_name")
         .eq("email", data.email.toLowerCase())
         .single();
 
@@ -71,7 +71,7 @@ export default function ForgotPassword() {
 
       // Try to sign up the user to Supabase Auth if they don't exist there yet
       // This is needed because resetPasswordForEmail only works for Supabase Auth users
-      const tempPassword = userData.password || crypto.randomUUID();
+      const tempPassword = crypto.randomUUID();
       
       // First try to sign up (will fail if user already exists in auth)
       const { error: signUpError } = await supabase.auth.signUp({
@@ -87,7 +87,7 @@ export default function ForgotPassword() {
       
       // Ignore "User already registered" error - that's expected
       if (signUpError && !signUpError.message.includes("already registered")) {
-        console.log("Sign up attempt result:", signUpError.message);
+        // Sign up failed for a reason other than duplicate - non-blocking
       }
 
       // Now request password reset
@@ -97,15 +97,9 @@ export default function ForgotPassword() {
         ? `${window.location.origin}/reset-password`
         : "https://dlsuqr.vercel.app/reset-password";
       
-      console.log("🔐 Requesting password reset for:", data.email.toLowerCase());
-      console.log("🔐 Redirect URL:", redirectUrl);
-      console.log("🔐 Is localhost:", isLocalhost);
-      
       const { data: resetData, error } = await supabase.auth.resetPasswordForEmail(data.email.toLowerCase(), {
         redirectTo: redirectUrl,
       });
-
-      console.log("🔐 Reset response:", { resetData, error });
 
       if (error) {
         console.error("Supabase reset password error:", error);

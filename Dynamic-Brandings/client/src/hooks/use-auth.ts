@@ -50,47 +50,32 @@ export function useAuth() {
     mutationFn: async (credentials: LoginRequest) => {
       const { identifier, password } = credentials;
       
-      // Query the users table directly via Supabase
-      // Try to find user by email first, then by ID number
-      let { data: userData, error } = await supabase
-        .from("users")
-        .select("*")
-        .or(`email.eq.${identifier},id_number.eq.${identifier}`)
-        .single();
+      // Authenticate via the Express server endpoint
+      // This verifies the password server-side and never exposes it to the client
+      const response = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ identifier, password }),
+      });
 
-      if (error || !userData) {
-        throw new Error("Invalid email/ID number or password");
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.message || "Invalid email/ID number or password");
       }
 
-      // Verify password (currently plaintext comparison - matches your existing backend)
-      // Note: In production, you should use proper password hashing
-      if (userData.password !== password) {
-        throw new Error("Invalid email/ID number or password");
-      }
+      const safeUserData = await response.json();
 
-      // Also authenticate with Express server to establish session cookie
-      // This is needed for admin operations (create/update/delete users)
-      try {
-        await fetch('/api/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({ identifier, password }),
-        });
-      } catch (e) {
-        console.warn("Express login failed (non-blocking):", e);
-      }
-
-      // Map database columns to User type (handle snake_case to camelCase)
+      // Map response to User type (server already strips password)
       const user: User = {
-        id: userData.id,
-        idNumber: userData.id_number,
-        email: userData.email,
-        password: userData.password,
-        fullName: userData.full_name,
-        role: userData.role,
-        profilePicture: userData.profile_picture,
-        createdAt: userData.created_at ? new Date(userData.created_at) : null,
+        id: safeUserData.id,
+        idNumber: safeUserData.idNumber || safeUserData.id_number,
+        email: safeUserData.email,
+        password: "",
+        fullName: safeUserData.fullName || safeUserData.full_name,
+        role: safeUserData.role,
+        profilePicture: safeUserData.profilePicture || safeUserData.profile_picture || null,
+        createdAt: safeUserData.createdAt || safeUserData.created_at ? new Date(safeUserData.createdAt || safeUserData.created_at) : null,
       };
 
       return user;
@@ -142,16 +127,17 @@ export function useAuth() {
     if (storedUser?.id) {
       const { data: userData } = await supabase
         .from("users")
-        .select("*")
+        .select("id, id_number, email, full_name, role, profile_picture, created_at")
         .eq("id", storedUser.id)
         .single();
       
       if (userData) {
+        // Never store password in client-side state
         const user: User = {
           id: userData.id,
           idNumber: userData.id_number,
           email: userData.email,
-          password: userData.password,
+          password: "",
           fullName: userData.full_name,
           role: userData.role,
           profilePicture: userData.profile_picture,

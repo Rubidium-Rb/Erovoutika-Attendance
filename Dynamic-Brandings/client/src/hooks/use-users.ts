@@ -9,7 +9,7 @@ function mapDbRowToUser(row: any): User {
     id: row.id,
     idNumber: row.id_number,
     email: row.email,
-    password: row.password,
+    password: "",
     fullName: row.full_name,
     role: row.role,
     profilePicture: row.profile_picture,
@@ -23,7 +23,7 @@ export function useUsers(role?: "student" | "teacher" | "superadmin") {
   return useQuery({
     queryKey,
     queryFn: async () => {
-      let query = supabase.from("users").select("*");
+      let query = supabase.from("users").select("id, id_number, email, full_name, role, profile_picture, created_at");
       if (role) {
         query = query.eq("role", role);
       }

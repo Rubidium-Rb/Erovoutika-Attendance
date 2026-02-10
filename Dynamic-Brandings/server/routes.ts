@@ -68,7 +68,9 @@ export async function registerRoutes(
     if (!req.isAuthenticated()) return res.sendStatus(401);
     const role = req.query.role as "student" | "teacher" | "superadmin" | undefined;
     const users = await storage.getUsersByRole(role);
-    res.json(users);
+    // Strip passwords before sending to client
+    const safeUsers = users.map(({ password, ...rest }) => rest);
+    res.json(safeUsers);
   });
 
   app.post(api.users.create.path, async (req, res) => {
@@ -83,7 +85,8 @@ export async function registerRoutes(
       if (existingEmail) {
         return res.status(400).json({ message: "Email already exists" });
       }
-      const user = await storage.createUser(userData);
+      const createdUser = await storage.createUser(userData);
+      const user = createdUser;
       
       // Also create user in Supabase Auth for password reset functionality
       if (supabaseAdmin && userData.email) {
@@ -111,7 +114,9 @@ export async function registerRoutes(
         console.warn("⚠️ SUPABASE_SERVICE_ROLE_KEY not set - user not added to Supabase Auth");
       }
       
-      res.status(201).json(user);
+      // Strip password before sending to client
+      const { password: _pwd, ...safeUser } = user;
+      res.status(201).json(safeUser);
     } catch (err) {
       if (err instanceof z.ZodError) {
         res.status(400).json(err.errors);
@@ -150,7 +155,7 @@ export async function registerRoutes(
 
     const updated = await storage.updateUser(id, updates);
     if (!updated) return res.status(404).json({ message: "User not found" });
-    
+
     // Also update Supabase Auth if email or password changed
     if (supabaseAdmin && currentUser?.email) {
       try {
@@ -183,7 +188,9 @@ export async function registerRoutes(
       }
     }
     
-    res.json(updated);
+    // Strip password before sending to client
+    const { password: _pwd, ...safeUpdated } = updated;
+    res.json(safeUpdated);
   });
 
   app.delete(api.users.delete.path, async (req, res) => {
@@ -295,7 +302,9 @@ export async function registerRoutes(
     if (!req.isAuthenticated()) return res.sendStatus(401);
     const subjectId = parseInt(req.params.id);
     const students = await storage.getSubjectStudents(subjectId);
-    res.json(students);
+    // Strip passwords before sending to client
+    const safeStudents = students.map(({ password, ...rest }) => rest);
+    res.json(safeStudents);
   });
 
   app.delete('/api/subjects/:id', async (req, res) => {
