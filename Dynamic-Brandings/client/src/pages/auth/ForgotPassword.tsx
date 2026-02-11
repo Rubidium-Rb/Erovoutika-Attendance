@@ -54,87 +54,62 @@ export default function ForgotPassword() {
     setIsSubmitting(true);
     
     try {
-      // First check if user exists in our users table
-      const { data: userData, error: userError } = await supabase
+      // Check if user exists without exposing any user data
+      // head: true returns only a count in the HTTP header — no data in the response body
+      const { count, error: countError } = await supabase
         .from("users")
-        .select("id, email, full_name")
-        .eq("email", data.email.toLowerCase())
-        .single();
+        .select("*", { count: "exact", head: true })
+        .eq("email", data.email.toLowerCase());
 
-      if (userError || !userData) {
-        // For security, don't reveal whether email exists
-        // Still show success message to prevent email enumeration
-        setSubmittedEmail(data.email);
-        setIsSubmitted(true);
-        return;
-      }
+      const userExists = !countError && count && count > 0;
 
-      // Try to sign up the user to Supabase Auth if they don't exist there yet
-      // This is needed because resetPasswordForEmail only works for Supabase Auth users
-      const tempPassword = crypto.randomUUID();
-      
-      // First try to sign up (will fail if user already exists in auth)
-      const { error: signUpError } = await supabase.auth.signUp({
-        email: data.email.toLowerCase(),
-        password: tempPassword,
-        options: {
-          data: {
-            full_name: userData.full_name,
-            user_id: userData.id,
+      if (userExists) {
+        // User exists — ensure they're in Supabase Auth for password reset to work
+        const tempPassword = crypto.randomUUID();
+        await supabase.auth.signUp({
+          email: data.email.toLowerCase(),
+          password: tempPassword,
+        });
+
+        // Request password reset
+        const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+        const redirectUrl = isLocalhost 
+          ? `${window.location.origin}/reset-password`
+          : "https://dlsuqr.vercel.app/reset-password";
+        
+        const { error } = await supabase.auth.resetPasswordForEmail(data.email.toLowerCase(), {
+          redirectTo: redirectUrl,
+        });
+
+        if (error) {
+          if (error.message.includes("rate") || error.message.includes("limit")) {
+            toast({
+              title: "Too Many Requests",
+              description: "Please wait a few minutes before requesting another reset email.",
+              variant: "destructive",
+            });
+            setIsSubmitting(false);
+            return;
           }
         }
-      });
-      
-      // Ignore "User already registered" error - that's expected
-      if (signUpError && !signUpError.message.includes("already registered")) {
-        // Sign up failed for a reason other than duplicate - non-blocking
       }
 
-      // Now request password reset
-      // Determine the correct redirect URL based on environment
-      const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-      const redirectUrl = isLocalhost 
-        ? `${window.location.origin}/reset-password`
-        : "https://dlsuqr.vercel.app/reset-password";
-      
-      const { data: resetData, error } = await supabase.auth.resetPasswordForEmail(data.email.toLowerCase(), {
-        redirectTo: redirectUrl,
+      // Always show the same message regardless of whether the email exists
+      toast({
+        title: "Request Received",
+        description: "If an account with that email exists, a reset link will be sent shortly.",
       });
-
-      if (error) {
-        console.error("Supabase reset password error:", error);
-        
-        // If rate limited, show specific message
-        if (error.message.includes("rate") || error.message.includes("limit")) {
-          toast({
-            title: "Too Many Requests",
-            description: "Please wait a few minutes before requesting another reset email.",
-            variant: "destructive",
-          });
-        } else {
-          toast({
-            title: "Notice",
-            description: "If an account exists, a reset email will be sent shortly.",
-            variant: "default",
-          });
-        }
-      } else {
-        toast({
-          title: "Email Sent! ✉️",
-          description: "Check your inbox (and spam folder) for the password reset link.",
-        });
-      }
-
       setSubmittedEmail(data.email);
       setIsSubmitted(true);
       
     } catch (error) {
-      console.error("Forgot password error:", error);
+      // Still show the same generic message to avoid leaking info via error vs success
       toast({
-        title: "Error",
-        description: "Something went wrong. Please try again later.",
-        variant: "destructive",
+        title: "Request Received",
+        description: "If an account with that email exists, a reset link will be sent shortly.",
       });
+      setSubmittedEmail(data.email);
+      setIsSubmitted(true);
     } finally {
       setIsSubmitting(false);
     }
