@@ -5,6 +5,21 @@ import { storage } from "./storage";
 import { api } from "@shared/routes";
 import { z } from "zod";
 import passport from "passport";
+import { createClient } from "@supabase/supabase-js";
+
+// Create Supabase admin client for server-side operations
+const supabaseUrl = process.env.VITE_SUPABASE_URL || "";
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+
+// Admin client for auth operations (only if service key is available)
+const supabaseAdmin = supabaseServiceKey 
+  ? createClient(supabaseUrl, supabaseServiceKey, {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false
+      }
+    })
+  : null;
 
 export async function registerRoutes(
   httpServer: Server,
@@ -18,7 +33,7 @@ export async function registerRoutes(
     passport.authenticate("local", (err: any, user: any) => {
       if (err) return next(err);
       if (!user) {
-        return res.status(401).json({ message: "Invalid email/username or password" });
+        return res.status(401).json({ message: "Invalid email/ID number or password" });
       }
       req.logIn(user, (err) => {
         if (err) return next(err);
@@ -53,23 +68,55 @@ export async function registerRoutes(
     if (!req.isAuthenticated()) return res.sendStatus(401);
     const role = req.query.role as "student" | "teacher" | "superadmin" | undefined;
     const users = await storage.getUsersByRole(role);
-    res.json(users);
+    // Strip passwords before sending to client
+    const safeUsers = users.map(({ password, ...rest }) => rest);
+    res.json(safeUsers);
   });
 
   app.post(api.users.create.path, async (req, res) => {
     // Ideally protected
     try {
       const userData = api.users.create.input.parse(req.body);
-      const existingUser = await storage.getUserByUsername(userData.username);
+      const existingUser = await storage.getUserByIdNumber(userData.idNumber);
       if (existingUser) {
-        return res.status(400).json({ message: "Username already exists" });
+        return res.status(400).json({ message: "ID Number already exists" });
       }
       const existingEmail = await storage.getUserByEmail(userData.email);
       if (existingEmail) {
         return res.status(400).json({ message: "Email already exists" });
       }
-      const user = await storage.createUser(userData);
-      res.status(201).json(user);
+      const createdUser = await storage.createUser(userData);
+      const user = createdUser;
+      
+      // Also create user in Supabase Auth for password reset functionality
+      if (supabaseAdmin && userData.email) {
+        try {
+          const { data: authUser, error: authError } = await supabaseAdmin.auth.admin.createUser({
+            email: userData.email.toLowerCase(),
+            password: userData.password,
+            email_confirm: true, // Auto-confirm email so they can reset password immediately
+            user_metadata: {
+              full_name: userData.fullName,
+              user_id: user.id,
+              role: userData.role,
+            }
+          });
+          
+          if (authError) {
+            console.warn("Could not create Supabase Auth user:", authError.message);
+          } else {
+            console.log("✓ User also created in Supabase Auth:", authUser?.user?.email);
+          }
+        } catch (authErr) {
+          console.warn("Supabase Auth admin.createUser failed (non-blocking):", authErr);
+        }
+      } else if (!supabaseAdmin) {
+        console.warn("⚠️ SUPABASE_SERVICE_ROLE_KEY not set - user not added to Supabase Auth");
+      }
+      
+      // Strip password before sending to client
+      const { password: _pwd, ...safeUser } = user;
+      res.status(201).json(safeUser);
     } catch (err) {
       if (err instanceof z.ZodError) {
         res.status(400).json(err.errors);
@@ -79,14 +126,14 @@ export async function registerRoutes(
     }
   });
 
-  // Check if username exists
-  app.get('/api/users/check-username', async (req, res) => {
+  // Check if ID number exists
+  app.get('/api/users/check-id-number', async (req, res) => {
     if (!req.isAuthenticated()) return res.sendStatus(401);
-    const username = req.query.username as string;
-    if (!username) {
-      return res.status(400).json({ message: "Username is required" });
+    const idNumber = req.query.idNumber as string;
+    if (!idNumber) {
+      return res.status(400).json({ message: "ID Number is required" });
     }
-    const existingUser = await storage.getUserByUsername(username);
+    const existingUser = await storage.getUserByIdNumber(idNumber);
     res.json({ exists: !!existingUser });
   });
 
@@ -95,24 +142,118 @@ export async function registerRoutes(
     const id = parseInt(req.params.id);
     const updates = api.users.update.input.parse(req.body);
 
-    // If updating username, check if it already exists
-    if (updates.username) {
-      const existingUser = await storage.getUserByUsername(updates.username);
+    // If updating ID number, check if it already exists
+    if (updates.idNumber) {
+      const existingUser = await storage.getUserByIdNumber(updates.idNumber);
       if (existingUser && existingUser.id !== id) {
-        return res.status(400).json({ message: "Username already exists" });
+        return res.status(400).json({ message: "ID Number already exists" });
       }
     }
 
+    // Get current user data before update (for Supabase Auth sync)
+    const currentUser = await storage.getUser(id);
+
     const updated = await storage.updateUser(id, updates);
     if (!updated) return res.status(404).json({ message: "User not found" });
-    res.json(updated);
+
+    // Also update Supabase Auth if email or password changed
+    if (supabaseAdmin && currentUser?.email) {
+      try {
+        // Find the auth user by current email
+        const { data: authUsers } = await supabaseAdmin.auth.admin.listUsers();
+        const authUser = authUsers?.users?.find(u => u.email?.toLowerCase() === currentUser.email.toLowerCase());
+        
+        if (authUser) {
+          const authUpdates: any = {};
+          if (updates.email && updates.email !== currentUser.email) {
+            authUpdates.email = updates.email.toLowerCase();
+          }
+          if (updates.password) {
+            authUpdates.password = updates.password;
+          }
+          if (updates.fullName) {
+            authUpdates.user_metadata = { 
+              ...authUser.user_metadata,
+              full_name: updates.fullName 
+            };
+          }
+          
+          if (Object.keys(authUpdates).length > 0) {
+            await supabaseAdmin.auth.admin.updateUserById(authUser.id, authUpdates);
+            console.log(`✓ Updated user ${updates.email || currentUser.email} in Supabase Auth`);
+          }
+        }
+      } catch (authErr) {
+        console.warn("Could not update Supabase Auth user (non-blocking):", authErr);
+      }
+    }
+    
+    // Strip password before sending to client
+    const { password: _pwd, ...safeUpdated } = updated;
+    res.json(safeUpdated);
   });
 
   app.delete(api.users.delete.path, async (req, res) => {
     if (!req.isAuthenticated()) return res.sendStatus(401);
     const id = parseInt(req.params.id);
+    
+    // Get user email before deleting (needed to delete from Supabase Auth)
+    const user = await storage.getUser(id);
+    
+    // Delete from users table
     await storage.deleteUser(id);
+    
+    // Also delete from Supabase Auth if we have the admin client and user email
+    if (supabaseAdmin && user?.email) {
+      try {
+        // Find the auth user by email
+        const { data: authUsers } = await supabaseAdmin.auth.admin.listUsers();
+        const authUser = authUsers?.users?.find(u => u.email?.toLowerCase() === user.email.toLowerCase());
+        
+        if (authUser) {
+          await supabaseAdmin.auth.admin.deleteUser(authUser.id);
+          console.log(`✓ Deleted user ${user.email} from Supabase Auth`);
+        }
+      } catch (authErr) {
+        console.warn("Could not delete from Supabase Auth (non-blocking):", authErr);
+      }
+    }
+    
     res.sendStatus(204);
+  });
+
+  // === Delete Supabase Auth User by Email (admin endpoint) ===
+  app.post('/api/auth/delete-auth-user', async (req, res) => {
+    if (!req.isAuthenticated()) return res.sendStatus(401);
+    
+    const currentUser = req.user as any;
+    if (currentUser.role !== 'superadmin') {
+      return res.status(403).json({ message: "Only superadmin can delete auth users" });
+    }
+    
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ message: "Email is required" });
+    }
+    
+    if (!supabaseAdmin) {
+      return res.status(500).json({ message: "Supabase admin not configured" });
+    }
+    
+    try {
+      const { data: authUsers } = await supabaseAdmin.auth.admin.listUsers();
+      const authUser = authUsers?.users?.find(u => u.email?.toLowerCase() === email.toLowerCase());
+      
+      if (authUser) {
+        await supabaseAdmin.auth.admin.deleteUser(authUser.id);
+        res.json({ success: true, message: "Auth user deleted" });
+      } else {
+        res.json({ success: true, message: "Auth user not found (already deleted or never existed)" });
+      }
+    } catch (err) {
+      console.error("Delete auth user error:", err);
+      res.status(500).json({ message: "Failed to delete auth user" });
+    }
   });
 
   // === Subjects ===
@@ -161,7 +302,9 @@ export async function registerRoutes(
     if (!req.isAuthenticated()) return res.sendStatus(401);
     const subjectId = parseInt(req.params.id);
     const students = await storage.getSubjectStudents(subjectId);
-    res.json(students);
+    // Strip passwords before sending to client
+    const safeStudents = students.map(({ password, ...rest }) => rest);
+    res.json(safeStudents);
   });
 
   app.delete('/api/subjects/:id', async (req, res) => {
@@ -203,6 +346,27 @@ export async function registerRoutes(
     res.status(201).json(record);
   });
 
+  // Update an existing attendance record (teacher only)
+  app.patch('/api/attendance/:id', async (req, res) => {
+    if (!req.isAuthenticated()) return res.sendStatus(401);
+    const user = req.user as any;
+    
+    if (user.role !== "teacher" && user.role !== "superadmin") {
+      return res.status(403).json({ message: "Only teachers can update attendance records" });
+    }
+    
+    const id = parseInt(req.params.id as string);
+    const { status, remarks } = req.body;
+    
+    try {
+      const updated = await storage.updateAttendance(id, { status, remarks });
+      res.json(updated);
+    } catch (error) {
+      console.error('Error updating attendance:', error);
+      res.status(500).json({ error: 'Failed to update attendance record' });
+    }
+  });
+
   // Get attendance records for teacher's subjects
   app.get('/api/attendance/teacher', async (req, res) => {
     if (!req.isAuthenticated()) return res.sendStatus(401);
@@ -230,69 +394,81 @@ export async function registerRoutes(
 
   // Student scans QR code to record attendance
   app.post('/api/attendance/scan', async (req, res) => {
-    if (!req.isAuthenticated()) return res.sendStatus(401);
+    console.log('QR scan request received:', { body: req.body, authenticated: req.isAuthenticated() });
+    
+    if (!req.isAuthenticated()) {
+      return res.status(401).json({ message: "Please log in to scan attendance" });
+    }
     const user = req.user as any;
+    console.log('User attempting scan:', { id: user.id, role: user.role });
 
     if (user.role !== 'student') {
       return res.status(403).json({ message: "Only students can scan QR codes" });
     }
 
-    const { qrCode, subjectId: providedSubjectId } = req.body;
+    try {
+      const { qrCode } = req.body;
 
-    // For demo purposes, if no actual QR code is provided, use the providedSubjectId
-    // In production, we would validate the actual QR code
-    let subjectId: number;
-    let isLate = false;
+      // Require valid QR code
+      if (!qrCode) {
+        return res.status(400).json({ message: "QR code is required" });
+      }
 
-    if (qrCode && !qrCode.startsWith('SCAN_')) {
-      // Try to validate actual QR code
+      console.log('Validating QR code:', qrCode);
+
+      let subjectId: number;
+      let isLate = false;
+
+      // Validate the QR code against database
       const result = await storage.validateAndConsumeQrCode(qrCode);
       if (!result) {
-        return res.status(400).json({ message: "Invalid or expired QR code" });
+        return res.status(400).json({ message: "Invalid or expired QR code. Please ask your teacher to regenerate." });
       }
       subjectId = result.subjectId;
       isLate = result.isLate;
-    } else if (providedSubjectId) {
-      // Demo mode - use provided subject ID
-      subjectId = providedSubjectId;
-    } else {
-      return res.status(400).json({ message: "QR code or subject ID required" });
-    }
 
-    // Check if student is enrolled in this subject
-    const students = await storage.getSubjectStudents(subjectId);
-    const isEnrolled = students.some(s => s.id === user.id);
+      console.log('QR code validated, subjectId:', subjectId, 'isLate:', isLate);
 
-    if (!isEnrolled) {
-      return res.status(403).json({ message: "You are not enrolled in this subject" });
-    }
+      // Check if student is enrolled in this subject
+      const students = await storage.getSubjectStudents(subjectId);
+      const isEnrolled = students.some(s => s.id === user.id);
 
-    // Check if already marked attendance today for this subject
-    const today = new Date().toISOString().split('T')[0];
-    const existingRecords = await storage.getAttendance(user.id, subjectId, today);
+      if (!isEnrolled) {
+        return res.status(403).json({ message: "You are not enrolled in this subject" });
+      }
 
-    if (existingRecords.length > 0) {
-      return res.status(400).json({
-        message: "Attendance already recorded for today",
-        status: existingRecords[0].status
+      // Check if already marked attendance today for this subject
+      const today = new Date().toISOString().split('T')[0];
+      const existingRecords = await storage.getAttendance(user.id, subjectId, today);
+
+      if (existingRecords.length > 0) {
+        return res.status(400).json({
+          message: "Attendance already recorded for today",
+          status: existingRecords[0].status
+        });
+      }
+
+      // Record attendance
+      const status = isLate ? 'late' : 'present';
+      const record = await storage.markAttendance({
+        studentId: user.id,
+        subjectId,
+        date: today,
+        status,
+        remarks: isLate ? 'Arrived late' : 'On time'
       });
+
+      console.log('Attendance recorded successfully:', { studentId: user.id, subjectId, status });
+
+      res.status(201).json({
+        message: `Attendance recorded as ${status}`,
+        status,
+        record
+      });
+    } catch (error) {
+      console.error('Error in QR scan endpoint:', error);
+      res.status(500).json({ message: "Server error while processing scan" });
     }
-
-    // Record attendance
-    const status = isLate ? 'late' : 'present';
-    const record = await storage.markAttendance({
-      studentId: user.id,
-      subjectId,
-      date: today,
-      status,
-      remarks: isLate ? 'Arrived late' : 'On time'
-    });
-
-    res.status(201).json({
-      message: `Attendance recorded as ${status}`,
-      status,
-      record
-    });
   });
 
   // === Schedules ===
@@ -346,7 +522,8 @@ async function seedDatabase() {
   if (users.length === 0) {
     // Create Superadmin
     await storage.createUser({
-      username: "admin",
+      idNumber: "admin",
+      email: "admin@school.edu",
       password: "password", // In real app, hash this
       fullName: "System Administrator",
       role: "superadmin"
@@ -354,7 +531,8 @@ async function seedDatabase() {
 
     // Create Teacher
     const teacher = await storage.createUser({
-      username: "teacher",
+      idNumber: "teacher",
+      email: "teacher@school.edu",
       password: "password",
       fullName: "Dr. Jose Rizal",
       role: "teacher"
@@ -362,7 +540,8 @@ async function seedDatabase() {
 
     // Create Student
     const student = await storage.createUser({
-      username: "student",
+      idNumber: "student",
+      email: "student@school.edu",
       password: "password",
       fullName: "Juan Dela Cruz",
       role: "student"
@@ -481,13 +660,14 @@ async function seedStudentsForSubjects() {
 
     for (let i = 0; i < studentNames.length; i++) {
       const name = studentNames[i];
-      const username = `student${i + 2}`; // student2, student3, etc.
+      const idNumber = `student${i + 2}`; // student2, student3, etc.
 
       // Check if student already exists
-      const existing = await storage.getUserByUsername(username);
+      const existing = await storage.getUserByIdNumber(idNumber);
       if (!existing) {
         const student = await storage.createUser({
-          username,
+          idNumber,
+          email: `${name.first.toLowerCase()}.${name.last.toLowerCase()}@student.school.edu`,
           password: "password",
           fullName: `${name.first} ${name.last}`,
           role: "student"

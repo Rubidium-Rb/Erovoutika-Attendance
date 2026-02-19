@@ -13,7 +13,7 @@ import { eq, and, desc } from "drizzle-orm";
 export interface IStorage {
   // Users
   getUser(id: number): Promise<User | undefined>;
-  getUserByUsername(username: string): Promise<User | undefined>;
+  getUserByIdNumber(idNumber: string): Promise<User | undefined>;
   getUserByEmail(email: string): Promise<User | undefined>;
   getUserByIdentifier(identifier: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
@@ -36,6 +36,7 @@ export interface IStorage {
 
   // Attendance
   markAttendance(record: InsertAttendance): Promise<Attendance>;
+  updateAttendance(id: number, data: { status?: string; remarks?: string }): Promise<Attendance>;
   getAttendance(studentId?: number, subjectId?: number, date?: string): Promise<(Attendance & { studentName: string, subjectName: string })[]>;
   getAttendanceByTeacher(teacherId: number): Promise<(Attendance & { studentName: string, subjectName: string })[]>;
 
@@ -59,8 +60,8 @@ export class DatabaseStorage implements IStorage {
     return user;
   }
 
-  async getUserByUsername(username: string): Promise<User | undefined> {
-    const [user] = await db.select().from(users).where(eq(users.username, username));
+  async getUserByIdNumber(idNumber: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.idNumber, idNumber));
     return user;
   }
 
@@ -70,10 +71,10 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getUserByIdentifier(identifier: string): Promise<User | undefined> {
-    // Try to find user by email first, then by username
+    // Try to find user by email first, then by ID number
     let user = await this.getUserByEmail(identifier);
     if (!user) {
-      user = await this.getUserByUsername(identifier);
+      user = await this.getUserByIdNumber(identifier);
     }
     return user;
   }
@@ -172,6 +173,14 @@ export class DatabaseStorage implements IStorage {
   async markAttendance(record: InsertAttendance): Promise<Attendance> {
     const [att] = await db.insert(attendance).values(record).returning();
     return att;
+  }
+
+  async updateAttendance(id: number, data: { status?: string; remarks?: string }): Promise<Attendance> {
+    const [updated] = await db.update(attendance)
+      .set(data)
+      .where(eq(attendance.id, id))
+      .returning();
+    return updated;
   }
 
   async getAttendance(studentId?: number, subjectId?: number, date?: string): Promise<(Attendance & { studentName: string, subjectName: string })[]> {

@@ -1,25 +1,22 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef } from "react";
 import { useAuth } from "@/hooks/use-auth";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { api } from "@shared/routes";
+import { supabase } from "@/lib/supabase";
 import { useToast } from "@/hooks/use-toast";
+import { Link } from "wouter";
 import {
     User,
     Camera,
-    Mail,
+    IdCard,
     Shield,
     Calendar,
     Loader2,
-    Pencil,
-    Check,
-    X,
-    AlertCircle
+    Lock
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
 
 export default function Profile() {
     const { user, refreshUser } = useAuth();
@@ -28,48 +25,29 @@ export default function Profile() {
     const fileInputRef = useRef<HTMLInputElement>(null);
     const [isUploading, setIsUploading] = useState(false);
 
-    // Username editing state
-    const [isEditingUsername, setIsEditingUsername] = useState(false);
-    const [newUsername, setNewUsername] = useState("");
-    const [usernameError, setUsernameError] = useState("");
-    const [isCheckingUsername, setIsCheckingUsername] = useState(false);
-
-    // Initialize newUsername when user loads or when editing starts
-    useEffect(() => {
-        if (user && isEditingUsername) {
-            setNewUsername(user.username);
-        }
-    }, [user, isEditingUsername]);
-
     const { mutate: updateProfile, isPending } = useMutation({
-        mutationFn: async (data: { profilePicture?: string; username?: string }) => {
-            const res = await fetch(`/api/users/${user?.id}`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                credentials: 'include',
-                body: JSON.stringify(data),
-            });
-            if (!res.ok) {
-                const error = await res.json();
+        mutationFn: async (data: { profilePicture?: string }) => {
+            // Map to snake_case for database
+            const dbData: Record<string, any> = {};
+            if (data.profilePicture !== undefined) dbData.profile_picture = data.profilePicture;
+            
+            const { error } = await supabase
+                .from("users")
+                .update(dbData)
+                .eq("id", user?.id);
+            
+            if (error) {
                 throw new Error(error.message || "Failed to update profile");
             }
-            return res.json();
+            return { success: true };
         },
-        onSuccess: (_, variables) => {
-            queryClient.invalidateQueries({ queryKey: [api.auth.me.path] });
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ["auth-user"] });
             refreshUser?.();
-            if (variables.username) {
-                toast({
-                    title: "Username Updated",
-                    description: "Your username has been changed successfully."
-                });
-                setIsEditingUsername(false);
-            } else {
-                toast({
-                    title: "Profile Updated",
-                    description: "Your profile picture has been updated successfully."
-                });
-            }
+            toast({
+                title: "Profile Updated",
+                description: "Your profile picture has been updated successfully."
+            });
         },
         onError: (error: Error) => {
             toast({
@@ -79,68 +57,6 @@ export default function Profile() {
             });
         }
     });
-
-    // Check if username already exists
-    const checkUsernameExists = async (username: string): Promise<boolean> => {
-        if (!username || username === user?.username) return false;
-
-        try {
-            const res = await fetch(`/api/users/check-username?username=${encodeURIComponent(username)}`, {
-                credentials: 'include',
-            });
-            if (!res.ok) return false;
-            const data = await res.json();
-            return data.exists;
-        } catch {
-            return false;
-        }
-    };
-
-    const handleUsernameChange = async (value: string) => {
-        setNewUsername(value);
-        setUsernameError("");
-
-        // Basic validation
-        if (value.length < 3) {
-            setUsernameError("Username must be at least 3 characters");
-            return;
-        }
-
-        if (!/^[a-zA-Z0-9_]+$/.test(value)) {
-            setUsernameError("Username can only contain letters, numbers, and underscores");
-            return;
-        }
-
-        // If same as current, no need to check
-        if (value === user?.username) {
-            return;
-        }
-
-        // Check if username exists (debounced would be better, but keeping it simple)
-        setIsCheckingUsername(true);
-        const exists = await checkUsernameExists(value);
-        setIsCheckingUsername(false);
-
-        if (exists) {
-            setUsernameError("This username is already taken");
-        }
-    };
-
-    const handleSaveUsername = () => {
-        if (usernameError || !newUsername || newUsername === user?.username) {
-            if (newUsername === user?.username) {
-                setIsEditingUsername(false);
-            }
-            return;
-        }
-        updateProfile({ username: newUsername });
-    };
-
-    const handleCancelUsernameEdit = () => {
-        setIsEditingUsername(false);
-        setNewUsername(user?.username || "");
-        setUsernameError("");
-    };
 
     const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -325,76 +241,14 @@ export default function Profile() {
                             </div>
                         </div>
 
-                        {/* Username - Editable */}
+                        {/* ID Number - Read Only */}
                         <div className="flex items-start gap-4">
                             <div className="w-10 h-10 rounded-lg bg-secondary flex items-center justify-center flex-shrink-0">
-                                <Mail className="h-5 w-5 text-secondary-foreground" />
+                                <IdCard className="h-5 w-5 text-secondary-foreground" />
                             </div>
-                            <div className="flex-1">
-                                <p className="text-sm text-muted-foreground">Username</p>
-                                {isEditingUsername ? (
-                                    <div className="space-y-2 mt-1">
-                                        <div className="flex items-center gap-2">
-                                            <Input
-                                                value={newUsername}
-                                                onChange={(e) => handleUsernameChange(e.target.value)}
-                                                onKeyDown={(e) => {
-                                                    if (e.key === 'Enter' && !usernameError && !isCheckingUsername && newUsername) {
-                                                        e.preventDefault();
-                                                        handleSaveUsername();
-                                                    }
-                                                }}
-                                                placeholder="Enter new username"
-                                                className={`max-w-xs ${usernameError ? 'border-destructive' : ''}`}
-                                                disabled={isPending}
-                                            />
-                                            {isCheckingUsername && (
-                                                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                                            )}
-                                        </div>
-                                        {usernameError && (
-                                            <div className="flex items-center gap-1 text-sm text-destructive">
-                                                <AlertCircle className="h-3 w-3" />
-                                                {usernameError}
-                                            </div>
-                                        )}
-                                        <div className="flex gap-2">
-                                            <Button
-                                                size="sm"
-                                                onClick={handleSaveUsername}
-                                                disabled={isPending || !!usernameError || isCheckingUsername || !newUsername}
-                                            >
-                                                {isPending ? (
-                                                    <Loader2 className="h-4 w-4 animate-spin mr-1" />
-                                                ) : (
-                                                    <Check className="h-4 w-4 mr-1" />
-                                                )}
-                                                Save
-                                            </Button>
-                                            <Button
-                                                size="sm"
-                                                variant="ghost"
-                                                onClick={handleCancelUsernameEdit}
-                                                disabled={isPending}
-                                            >
-                                                <X className="h-4 w-4 mr-1" />
-                                                Cancel
-                                            </Button>
-                                        </div>
-                                    </div>
-                                ) : (
-                                    <div className="flex items-center gap-2">
-                                        <p className="text-lg font-semibold">{user.username}</p>
-                                        <Button
-                                            variant="ghost"
-                                            size="icon"
-                                            className="h-7 w-7"
-                                            onClick={() => setIsEditingUsername(true)}
-                                        >
-                                            <Pencil className="h-3 w-3" />
-                                        </Button>
-                                    </div>
-                                )}
+                            <div>
+                                <p className="text-sm text-muted-foreground">ID Number</p>
+                                <p className="text-lg font-semibold">{user.idNumber}</p>
                             </div>
                         </div>
 
@@ -434,6 +288,22 @@ export default function Profile() {
                                 </div>
                             </div>
                         )}
+
+                        {/* Reset Password */}
+                        <div className="flex items-start gap-4">
+                            <div className="w-10 h-10 rounded-lg bg-secondary flex items-center justify-center flex-shrink-0">
+                                <Lock className="h-5 w-5 text-secondary-foreground" />
+                            </div>
+                            <div>
+                                <p className="text-sm text-muted-foreground">Password</p>
+                                <Link
+                                    href="/forgot-password?from=profile"
+                                    className="text-primary hover:underline font-medium"
+                                >
+                                    Reset Password
+                                </Link>
+                            </div>
+                        </div>
                     </CardContent>
                 </Card>
             </div>

@@ -1,8 +1,11 @@
-import { useState, useMemo, useRef, useEffect } from "react";
+import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import { useAuth } from "@/hooks/use-auth";
-import { useSubjects } from "@/hooks/use-subjects";
+import { useStudentSubjects } from "@/hooks/use-subjects";
 import { useAttendance } from "@/hooks/use-attendance";
 import { useToast } from "@/hooks/use-toast";
+import { supabase } from "@/lib/supabase";
+import { getPhilippineTimeISO } from "@/lib/utils";
+import { Html5Qrcode } from "html5-qrcode";
 import { 
   CalendarCheck,
   CheckCircle2,
@@ -11,9 +14,8 @@ import {
   AlertCircle,
   QrCode,
   ScanLine,
-  X,
-  Camera,
-  Loader2
+  Loader2,
+  X
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -59,23 +61,34 @@ const StatusBadge = ({ status }: { status: string }) => {
   }
 };
 
+// Scan result type
+type ScanResultType = 'present' | 'late' | 'error' | 'already' | null;
+
 export default function StudentAttendance() {
   const { user } = useAuth();
-  const { data: subjects, isLoading: subjectsLoading } = useSubjects();
+  const { data: subjects, isLoading: subjectsLoading } = useStudentSubjects(user?.id);
   const { toast } = useToast();
   
   const [selectedSubjectId, setSelectedSubjectId] = useState<string>("all");
   const [selectedMonth, setSelectedMonth] = useState<string>("all");
   const [scannerOpen, setScannerOpen] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
-  const [scanResult, setScanResult] = useState<string | null>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const streamRef = useRef<MediaStream | null>(null);
+  const [scanResult, setScanResult] = useState<ScanResultType>(null);
+  const [scanMessage, setScanMessage] = useState<string>("");
+  const [isProcessing, setIsProcessing] = useState(false);
   
-  // Get attendance for current student
+  const html5QrCodeRef = useRef<Html5Qrcode | null>(null);
+  const scannerContainerId = "qr-reader";
+  
+  // Get attendance for current student with polling for real-time updates
   const { data: attendance, isLoading: attendanceLoading, refetch: refetchAttendance } = useAttendance({
     studentId: user?.id
-  });
+  }, { refetchInterval: 5000 }); // Poll every 5 seconds
+
+  // Debug: Log user and attendance data
+  useEffect(() => {
+
+  }, [user, attendance]);
 
   // Generate month options (last 12 months)
   const monthOptions = useMemo(() => {
@@ -102,7 +115,6 @@ export default function StudentAttendance() {
         record.date?.startsWith(selectedMonth);
       return matchesSubject && matchesMonth;
     }).sort((a, b) => {
-      // Sort by date descending
       const dateA = a.date || '';
       const dateB = b.date || '';
       return dateB.localeCompare(dateA);
@@ -122,15 +134,7 @@ export default function StudentAttendance() {
       const total = subjectRecords.length;
       const attendanceRate = total > 0 ? ((present + late) / total * 100).toFixed(1) : '0.0';
       
-      return {
-        subject,
-        present,
-        late,
-        absent,
-        excused,
-        total,
-        attendanceRate
-      };
+      return { subject, present, late, absent, excused, total, attendanceRate };
     });
   }, [attendance, subjects]);
 
@@ -148,100 +152,323 @@ export default function StudentAttendance() {
     return { present, late, absent, excused, total, rate };
   }, [attendance]);
 
-  // Start camera for QR scanning
-  const startScanner = async () => {
-    setScannerOpen(true);
-    setIsScanning(true);
-    setScanResult(null);
-    
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { facingMode: 'environment' } 
-      });
-      streamRef.current = stream;
-      
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.play();
+  // Stop the QR scanner
+  const stopScanner = useCallback(async () => {
+    if (html5QrCodeRef.current) {
+      try {
+        const state = html5QrCodeRef.current.getState();
+        if (state === 2) { // SCANNING state
+          await html5QrCodeRef.current.stop();
+        }
+        html5QrCodeRef.current.clear();
+      } catch (err) {
+        console.error("Error stopping scanner:", err);
       }
-    } catch (err) {
-      console.error('Error accessing camera:', err);
-      toast({
-        title: "Camera Error",
-        description: "Unable to access camera. Please check permissions.",
-        variant: "destructive"
-      });
-      setIsScanning(false);
-    }
-  };
-
-  // Stop camera
-  const stopScanner = () => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
-      streamRef.current = null;
+      html5QrCodeRef.current = null;
     }
     setIsScanning(false);
+  }, []);
+
+  // Process the scanned QR code - uses Supabase directly for Vercel compatibility
+  // Supports both JSON format (in-app scanner) and URL format (external scanner redirect)
+  const processQRCode = useCallback(async (qrData: string) => {
+    if (isProcessing) return;
+    
+
+    
+    let token: string;
+    let subjectId: string;
+    
+    // Try to parse as JSON first (in-app QR scanner)
+    if (qrData.startsWith('{') && qrData.endsWith('}')) {
+      try {
+        const parsedData = JSON.parse(qrData);
+        token = parsedData.token;
+        subjectId = parsedData.subjectId;
+
+      } catch (parseError) {
+        console.error('JSON parse error:', parseError);
+        return; // Silently ignore invalid JSON
+      }
+    } 
+    // Try to parse as URL (external QR scanner redirect)
+    else if (qrData.includes('?') && qrData.includes('token=')) {
+      try {
+        const url = new URL(qrData);
+        token = url.searchParams.get('token') || '';
+        subjectId = url.searchParams.get('subjectId') || '';
+
+      } catch (urlError) {
+        console.error('URL parse error:', urlError);
+        return; // Silently ignore invalid URL
+      }
+    }
+    // Invalid format
+    else {
+
+      return;
+    }
+    
+    if (!token || !subjectId) {
+
+      return;
+    }
+    
+    setIsProcessing(true);
+    
+    // Stop scanner immediately to prevent multiple scans
+    await stopScanner();
+
+    try {
+      // Check if user is logged in
+      if (!user || !user.id) {
+        throw new Error("Please log in to scan attendance");
+      }
+
+      if (user.role !== 'student') {
+        throw new Error("Only students can scan attendance QR codes");
+      }
+
+
+
+      // Step 1: Validate QR code against database
+      const { data: qrRecord, error: qrError } = await supabase
+        .from('qr_codes')
+        .select('id, subject_id, code, active')
+        .eq('code', token)
+        .eq('active', true)
+        .single();
+
+      if (qrError || !qrRecord) {
+        throw new Error("Invalid or expired QR code. Please ask your teacher to regenerate.");
+      }
+
+      const validSubjectId = qrRecord.subject_id;
+      const isLate = token.includes('_LATE');
+
+
+
+      // Step 2: Check if student is enrolled in this subject
+      const { data: enrollment, error: enrollError } = await supabase
+        .from('enrollments')
+        .select('id')
+        .eq('student_id', user.id)
+        .eq('subject_id', validSubjectId)
+        .single();
+
+      if (enrollError || !enrollment) {
+        throw new Error("You are not enrolled in this subject");
+      }
+
+      // Step 3: Check if already marked attendance today
+      const today = new Date().toISOString().split('T')[0];
+      const { data: existingAttendance } = await supabase
+        .from('attendance')
+        .select('id, status')
+        .eq('student_id', user.id)
+        .eq('subject_id', validSubjectId)
+        .eq('date', today);
+
+      // Determine the new status based on QR code
+      const newStatus = isLate ? 'late' : 'present';
+
+      // If already has attendance record, UPDATE it (allows changing from absent to present/late)
+      if (existingAttendance && existingAttendance.length > 0) {
+        const existingRecord = existingAttendance[0];
+        
+        // If already present or late, don't change it
+        if (existingRecord.status === 'present' || existingRecord.status === 'late') {
+          setScanResult('already');
+          setScanMessage(`You're already checked in as ${existingRecord.status}`);
+          return;
+        }
+        
+        // Update the existing record (e.g., from absent to present/late)
+        const { error: updateError } = await supabase
+          .from('attendance')
+          .update({ 
+            status: newStatus,
+            time_in: getPhilippineTimeISO(),
+            remarks: isLate ? 'Arrived late (updated)' : 'On time (updated)'
+          })
+          .eq('id', existingRecord.id);
+        
+        if (updateError) {
+          console.error('Failed to update attendance:', updateError);
+          throw new Error("Failed to update attendance record");
+        }
+
+        // Deactivate QR code after successful scan
+        await supabase
+          .from('qr_codes')
+          .update({ active: false })
+          .eq('id', qrRecord.id);
+
+        setScanResult(newStatus);
+        setScanMessage(`Attendance updated to ${newStatus}!`);
+        refetchAttendance();
+        
+        toast({
+          title: newStatus === 'present' ? "✓ Present!" : "⏰ Marked Late",
+          description: `Your attendance has been updated to ${newStatus}.`,
+        });
+        return;
+      }
+
+      // Step 4: Deactivate the QR code (single use)
+      await supabase
+        .from('qr_codes')
+        .update({ active: false })
+        .eq('id', qrRecord.id);
+
+      // Step 5: Record attendance
+      const status = isLate ? 'late' : 'present';
+      const { data: newRecord, error: insertError } = await supabase
+        .from('attendance')
+        .insert({
+          student_id: user.id,
+          subject_id: validSubjectId,
+          date: today,
+          status,
+          time_in: getPhilippineTimeISO(),
+          remarks: isLate ? 'Arrived late' : 'On time'
+        })
+        .select()
+        .single();
+
+      if (insertError) {
+        console.error('Failed to insert attendance:', insertError);
+        throw new Error("Failed to record attendance. Please try again.");
+      }
+
+
+
+      setScanResult(status);
+      setScanMessage(`Attendance recorded as ${status}`);
+      refetchAttendance();
+      
+      toast({
+        title: status === 'present' ? "✓ Present!" : "⏰ Marked Late",
+        description: `Attendance recorded as ${status}`,
+      });
+    } catch (error) {
+      console.error("QR scan error:", error);
+      setScanResult('error');
+      setScanMessage(error instanceof Error ? error.message : "Failed to process QR code");
+      
+      toast({
+        title: "Scan Failed",
+        description: error instanceof Error ? error.message : "Failed to process QR code",
+        variant: "destructive"
+      });
+    } finally {
+      setIsProcessing(false);
+    }
+  }, [isProcessing, stopScanner, refetchAttendance, toast, user]);
+
+  // Start the QR scanner
+  const startScanner = useCallback(async () => {
+    setScannerOpen(true);
+    setScanResult(null);
+    setScanMessage("");
+    setIsScanning(false);
+
+    // Wait for dialog to render
+    setTimeout(async () => {
+      try {
+        const html5QrCode = new Html5Qrcode(scannerContainerId);
+        html5QrCodeRef.current = html5QrCode;
+
+        await html5QrCode.start(
+          { facingMode: "environment" },
+          {
+            fps: 5, // Reduced FPS to prevent rapid partial scans
+            qrbox: { width: 250, height: 250 },
+            aspectRatio: 1.0,
+            disableFlip: false
+          },
+          (decodedText) => {
+            processQRCode(decodedText);
+          },
+          () => {
+            // Ignore scan errors (fires when no QR detected)
+          }
+        );
+        setIsScanning(true);
+      } catch (err) {
+        console.error("Failed to start scanner:", err);
+        setIsScanning(false);
+        toast({
+          title: "Camera Error",
+          description: "Unable to access camera. Please check permissions.",
+          variant: "destructive"
+        });
+      }
+    }, 200);
+  }, [processQRCode, toast]);
+
+  // Close the scanner dialog
+  const closeScanner = useCallback(() => {
+    stopScanner();
     setScannerOpen(false);
     setScanResult(null);
-  };
+    setScanMessage("");
+  }, [stopScanner]);
 
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
+      if (html5QrCodeRef.current) {
+        html5QrCodeRef.current.stop().catch(() => {});
       }
     };
   }, []);
 
-  // Simulate QR code scan (in production, use a proper QR scanner library)
-  const handleSimulateScan = async () => {
-    // In a real app, this would:
-    // 1. Decode the QR code from the camera feed
-    // 2. Send the code to the server along with student ID
-    // 3. Server validates the code, marks attendance, and generates new code
-    
-    setIsScanning(false);
-    
-    try {
-      // Simulate API call to scan endpoint
-      const response = await fetch('/api/attendance/scan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          studentId: user?.id,
-          // qrCode: decodedQRCode (would come from actual scan)
-          qrCode: `SCAN_${Date.now()}` // Simulated
-        })
-      });
-      
-      if (response.ok) {
-        const result = await response.json();
-        setScanResult(result.status);
-        toast({
-          title: "Attendance Recorded",
-          description: `You have been marked as ${result.status}`,
-        });
-        refetchAttendance();
-      } else {
-        const error = await response.json();
-        toast({
-          title: "Scan Failed",
-          description: error.message || "Unable to record attendance",
-          variant: "destructive"
-        });
+  // Check for pending attendance scan from QR code scanned via external app
+  useEffect(() => {
+    const pendingScanData = sessionStorage.getItem('pendingAttendanceScan');
+    if (pendingScanData && user && user.role === 'student') {
+      try {
+        const { token, subjectId, timestamp } = JSON.parse(pendingScanData);
+        
+        // Check if scan is not too old (5 minutes max)
+        const fiveMinutes = 5 * 60 * 1000;
+        if (Date.now() - timestamp < fiveMinutes) {
+          // Clear the pending scan first to prevent re-processing
+          sessionStorage.removeItem('pendingAttendanceScan');
+          
+          // Create the URL format string that processQRCode expects
+          const qrUrl = `${window.location.origin}/login?token=${token}&subjectId=${subjectId}&scan=attendance`;
+          
+          // Process the attendance
+          toast({
+            title: "Processing Attendance",
+            description: "Recording your attendance from QR code scan...",
+          });
+          
+          processQRCode(qrUrl);
+        } else {
+          // Scan expired
+          sessionStorage.removeItem('pendingAttendanceScan');
+          toast({
+            title: "QR Code Expired",
+            description: "The scanned QR code has expired. Please scan again.",
+            variant: "destructive"
+          });
+        }
+      } catch (e) {
+        console.error('Failed to process pending scan:', e);
+        sessionStorage.removeItem('pendingAttendanceScan');
       }
-    } catch (err) {
-      // For demo purposes, show success
-      setScanResult('present');
-      toast({
-        title: "Attendance Recorded",
-        description: "You have been marked as present",
-      });
-      refetchAttendance();
     }
-  };
+  }, [user, processQRCode, toast]);
+
+  // Reset scanner for another scan
+  const resetScanner = useCallback(() => {
+    setScanResult(null);
+    setScanMessage("");
+    startScanner();
+  }, [startScanner]);
 
   if (subjectsLoading || attendanceLoading) {
     return (
@@ -263,18 +490,14 @@ export default function StudentAttendance() {
             View your attendance records and scan QR to check-in
           </p>
         </div>
-        <Button 
-          onClick={startScanner}
-          className="gap-2"
-          size="lg"
-        >
+        <Button onClick={startScanner} className="gap-2" size="lg">
           <ScanLine className="w-5 h-5" />
           Scan QR Code
         </Button>
       </div>
 
       {/* Overall Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         <Card>
           <CardContent className="p-4">
             <div className="flex items-center gap-3">
@@ -334,6 +557,20 @@ export default function StudentAttendance() {
         <Card>
           <CardContent className="p-4">
             <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-lg bg-blue-100 flex items-center justify-center">
+                <AlertCircle className="w-5 h-5 text-blue-600" />
+              </div>
+              <div>
+                <p className="text-2xl font-bold text-blue-600">{overallStats.excused}</p>
+                <p className="text-xs text-muted-foreground">Excused</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+        
+        <Card>
+          <CardContent className="p-4">
+            <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
                 <span className="text-lg font-bold text-primary">%</span>
               </div>
@@ -368,10 +605,11 @@ export default function StudentAttendance() {
                       {stat.attendanceRate}%
                     </Badge>
                   </div>
-                  <div className="flex gap-3 text-sm">
+                  <div className="flex gap-3 text-sm flex-wrap">
                     <span className="text-green-600">{stat.present} Present</span>
                     <span className="text-yellow-600">{stat.late} Late</span>
                     <span className="text-red-600">{stat.absent} Absent</span>
+                    <span className="text-blue-600">{stat.excused} Excused</span>
                   </div>
                 </div>
               ))}
@@ -428,7 +666,7 @@ export default function StudentAttendance() {
                   <TableRow className="bg-muted/50">
                     <TableHead>Date</TableHead>
                     <TableHead>Subject</TableHead>
-                    <TableHead>Time In</TableHead>
+                    <TableHead className="whitespace-nowrap">Time In</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Remarks</TableHead>
                   </TableRow>
@@ -440,15 +678,12 @@ export default function StudentAttendance() {
                         {record.date ? format(parseISO(record.date), 'EEEE, MMM d, yyyy') : '-'}
                       </TableCell>
                       <TableCell>
-                        <div>
-                          <p className="font-medium">{record.subjectName || 'Unknown'}</p>
-                        </div>
+                        <p className="font-medium">{record.subjectName || 'Unknown'}</p>
                       </TableCell>
-                      <TableCell>
-                        {record.timeIn 
-                          ? format(new Date(record.timeIn), 'h:mm a')
-                          : '-'
-                        }
+                      <TableCell className="whitespace-nowrap">
+                        {record.timeIn && record.timeIn instanceof Date && !isNaN(record.timeIn.getTime())
+                          ? record.timeIn.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
+                          : '-'}
                       </TableCell>
                       <TableCell>
                         <StatusBadge status={record.status} />
@@ -472,7 +707,7 @@ export default function StudentAttendance() {
       </Card>
 
       {/* QR Scanner Dialog */}
-      <Dialog open={scannerOpen} onOpenChange={(open) => !open && stopScanner()}>
+      <Dialog open={scannerOpen} onOpenChange={(open) => !open && closeScanner()}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
@@ -483,87 +718,67 @@ export default function StudentAttendance() {
           
           <div className="space-y-4">
             {scanResult ? (
-              // Scan Result
               <div className="text-center py-8">
                 <div className={`w-20 h-20 mx-auto rounded-full flex items-center justify-center mb-4 ${
-                  scanResult === 'present' ? 'bg-green-100' : 'bg-yellow-100'
+                  scanResult === 'present' ? 'bg-green-100' : 
+                  scanResult === 'late' ? 'bg-yellow-100' :
+                  scanResult === 'already' ? 'bg-blue-100' : 'bg-red-100'
                 }`}>
                   {scanResult === 'present' ? (
                     <CheckCircle2 className="w-10 h-10 text-green-600" />
-                  ) : (
+                  ) : scanResult === 'late' ? (
                     <Clock className="w-10 h-10 text-yellow-600" />
+                  ) : scanResult === 'already' ? (
+                    <AlertCircle className="w-10 h-10 text-blue-600" />
+                  ) : (
+                    <XCircle className="w-10 h-10 text-red-600" />
                   )}
                 </div>
                 <h3 className="text-xl font-semibold mb-2">
-                  {scanResult === 'present' ? 'Present!' : 'Marked Late'}
+                  {scanResult === 'present' ? 'Present!' : 
+                   scanResult === 'late' ? 'Marked Late' :
+                   scanResult === 'already' ? 'Already Checked In' : 'Scan Failed'}
                 </h3>
-                <p className="text-muted-foreground">
-                  Your attendance has been recorded
-                </p>
-                <Button onClick={stopScanner} className="mt-4">
-                  Done
-                </Button>
+                <p className="text-muted-foreground mb-4">{scanMessage}</p>
+                <div className="flex gap-2 justify-center">
+                  {scanResult === 'error' && (
+                    <Button onClick={resetScanner} variant="outline">Try Again</Button>
+                  )}
+                  <Button onClick={closeScanner}>Done</Button>
+                </div>
               </div>
             ) : (
-              // Camera View
               <>
                 <div className="relative aspect-square bg-black rounded-lg overflow-hidden">
-                  <video
-                    ref={videoRef}
-                    className="w-full h-full object-cover"
-                    playsInline
-                    muted
-                  />
+                  <div id={scannerContainerId} className="w-full h-full" />
                   
-                  {/* Scanner Overlay */}
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <div className="w-48 h-48 border-2 border-white rounded-lg relative">
-                      <div className="absolute top-0 left-0 w-6 h-6 border-t-4 border-l-4 border-primary rounded-tl-lg" />
-                      <div className="absolute top-0 right-0 w-6 h-6 border-t-4 border-r-4 border-primary rounded-tr-lg" />
-                      <div className="absolute bottom-0 left-0 w-6 h-6 border-b-4 border-l-4 border-primary rounded-bl-lg" />
-                      <div className="absolute bottom-0 right-0 w-6 h-6 border-b-4 border-r-4 border-primary rounded-br-lg" />
-                      
-                      {/* Scanning Line Animation */}
-                      {isScanning && (
-                        <div className="absolute inset-x-2 top-1/2 h-0.5 bg-primary animate-pulse" />
-                      )}
+                  {isProcessing && (
+                    <div className="absolute inset-0 bg-black/70 flex items-center justify-center">
+                      <div className="text-center text-white">
+                        <Loader2 className="w-12 h-12 animate-spin mx-auto mb-2" />
+                        <p>Processing...</p>
+                      </div>
                     </div>
-                  </div>
+                  )}
                   
-                  {!isScanning && (
-                    <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
-                      <Camera className="w-12 h-12 text-white/50" />
+                  {!isScanning && !isProcessing && (
+                    <div className="absolute inset-0 bg-gray-900 flex items-center justify-center">
+                      <div className="text-center text-white">
+                        <Loader2 className="w-12 h-12 animate-spin mx-auto mb-2" />
+                        <p>Starting camera...</p>
+                      </div>
                     </div>
                   )}
                 </div>
                 
                 <p className="text-center text-sm text-muted-foreground">
-                  Position the QR code within the frame
+                  Point your camera at the QR code displayed by your teacher
                 </p>
                 
-                <div className="flex gap-2">
-                  <Button
-                    variant="outline"
-                    className="flex-1"
-                    onClick={stopScanner}
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    className="flex-1"
-                    onClick={handleSimulateScan}
-                    disabled={!isScanning}
-                  >
-                    {isScanning ? (
-                      <>
-                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                        Scanning...
-                      </>
-                    ) : (
-                      'Start Scan'
-                    )}
-                  </Button>
-                </div>
+                <Button variant="outline" className="w-full" onClick={closeScanner}>
+                  <X className="w-4 h-4 mr-2" />
+                  Cancel
+                </Button>
                 
                 <p className="text-xs text-center text-muted-foreground">
                   Note: The QR code changes after each scan to prevent sharing

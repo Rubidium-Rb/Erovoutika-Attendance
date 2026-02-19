@@ -62,7 +62,7 @@ export default function UserManagement() {
 
   const filteredUsers = users?.filter(u => 
     u.fullName.toLowerCase().includes(search.toLowerCase()) || 
-    u.username.toLowerCase().includes(search.toLowerCase()) ||
+    u.idNumber.toLowerCase().includes(search.toLowerCase()) ||
     ((u as any).email || "").toLowerCase().includes(search.toLowerCase())
   );
 
@@ -82,7 +82,7 @@ export default function UserManagement() {
         <div className="relative flex-1 max-w-sm">
           <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
           <Input 
-            placeholder="Search by name, username, or email..." 
+            placeholder="Search by name, ID number, or email..." 
             className="pl-9"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -109,7 +109,7 @@ export default function UserManagement() {
           <TableHeader>
             <TableRow className="bg-gray-50/50">
               <TableHead>Full Name</TableHead>
-              <TableHead>Username</TableHead>
+              <TableHead>ID Number</TableHead>
               <TableHead>Email</TableHead>
               <TableHead>Role</TableHead>
               <TableHead className="text-right">Actions</TableHead>
@@ -123,7 +123,7 @@ export default function UserManagement() {
             ) : filteredUsers?.map((user) => (
               <TableRow key={user.id}>
                 <TableCell className="font-medium">{user.fullName}</TableCell>
-                <TableCell className="font-mono text-xs text-muted-foreground">{user.username}</TableCell>
+                <TableCell className="font-mono text-xs text-muted-foreground">{user.idNumber}</TableCell>
                 <TableCell className="text-sm text-muted-foreground">{(user as any).email}</TableCell>
                 <TableCell>
                   <span className={cn(
@@ -205,7 +205,7 @@ function CreateUserDialog() {
     resolver: zodResolver(insertUserSchema),
     defaultValues: {
       fullName: "",
-      username: "",
+      idNumber: "",
       email: "",
       password: "",
       role: "student",
@@ -255,10 +255,10 @@ function CreateUserDialog() {
             
             <FormField
               control={form.control}
-              name="username"
+              name="idNumber"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Username</FormLabel>
+                  <FormLabel>ID Number</FormLabel>
                   <FormControl>
                     <Input placeholder="e.g. 12345678" {...field} />
                   </FormControl>
@@ -343,13 +343,13 @@ function EditUserDialog({ user, open, onOpenChange }: EditUserDialogProps) {
   const form = useForm<z.infer<typeof insertUserSchema>>({
     resolver: zodResolver(insertUserSchema.partial().extend({
       fullName: z.string().min(1, "Full name is required"),
-      username: z.string().min(1, "Username is required"),
+      idNumber: z.string().min(1, "ID Number is required"),
       email: z.string().email("Invalid email address"),
       role: z.enum(["student", "teacher", "superadmin"]),
     })),
     defaultValues: {
       fullName: "",
-      username: "",
+      idNumber: "",
       email: "",
       password: "",
       role: "student",
@@ -361,7 +361,7 @@ function EditUserDialog({ user, open, onOpenChange }: EditUserDialogProps) {
     if (user) {
       form.reset({
         fullName: user.fullName || "",
-        username: user.username || "",
+        idNumber: user.idNumber || "",
         email: user.email || "",
         password: "",
         role: user.role || "student",
@@ -375,7 +375,7 @@ function EditUserDialog({ user, open, onOpenChange }: EditUserDialogProps) {
     // Only include password if it was changed
     const updateData: any = {
       fullName: data.fullName,
-      username: data.username,
+      idNumber: data.idNumber,
       email: data.email,
       role: data.role,
     };
@@ -420,10 +420,10 @@ function EditUserDialog({ user, open, onOpenChange }: EditUserDialogProps) {
             
             <FormField
               control={form.control}
-              name="username"
+              name="idNumber"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Username</FormLabel>
+                  <FormLabel>ID Number</FormLabel>
                   <FormControl>
                     <Input placeholder="e.g. 12345678" {...field} />
                   </FormControl>

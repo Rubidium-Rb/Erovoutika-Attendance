@@ -34,7 +34,7 @@ export function setupAuth(app: Express) {
       { usernameField: 'identifier' },
       async (identifier, password, done) => {
         try {
-          // Try to find user by email or username
+          // Try to find user by email or ID number
           const user = await storage.getUserByIdentifier(identifier);
           // In a real app, use bcrypt.compare(password, user.password)
           if (!user || user.password !== password) {

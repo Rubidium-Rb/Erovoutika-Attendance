@@ -1,17 +1,18 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useAuth } from "@/hooks/use-auth";
 import { useSystemSettings } from "@/hooks/use-system-settings";
-import { useLocation } from "wouter";
+import { useLocation, Link } from "wouter";
 import { 
   GraduationCap, 
   Loader2, 
   User, 
   Lock, 
   BookOpen, 
-  ShieldCheck 
+  ShieldCheck,
+  QrCode
 } from "lucide-react";
 import {
   Form,
@@ -25,10 +26,11 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 
 // Using z.enum directly for type safety with the backend schema
 const loginSchema = z.object({
-  identifier: z.string().min(1, "Email or username is required"),
+  identifier: z.string().min(1, "Email or ID Number is required"),
   password: z.string().min(1, "Password is required"),
   role: z.enum(["student", "teacher", "superadmin"]),
 });
@@ -40,10 +42,37 @@ export default function Login() {
   const { settings } = useSystemSettings();
   const [, setLocation] = useLocation();
   const [activeTab, setActiveTab] = useState<"student" | "teacher" | "superadmin">("student");
+  const [hasAttendanceScan, setHasAttendanceScan] = useState(false);
+
+  // Check for attendance scan parameters in URL (from QR code scanned via external app)
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const scan = urlParams.get('scan');
+    const token = urlParams.get('token');
+    const subjectId = urlParams.get('subjectId');
+    
+    if (scan === 'attendance' && token && subjectId) {
+      // Store attendance data in sessionStorage for processing after login
+      sessionStorage.setItem('pendingAttendanceScan', JSON.stringify({
+        token,
+        subjectId,
+        timestamp: Date.now()
+      }));
+      setHasAttendanceScan(true);
+      // Force student tab since only students scan attendance
+      setActiveTab('student');
+    }
+  }, []);
 
   // Redirect if already logged in
   if (user) {
-    setLocation("/dashboard");
+    // If there's a pending attendance scan, redirect to attendance page
+    const pendingScan = sessionStorage.getItem('pendingAttendanceScan');
+    if (pendingScan && user.role === 'student') {
+      setLocation("/attendance");
+    } else {
+      setLocation("/dashboard");
+    }
     return null;
   }
 
@@ -81,6 +110,17 @@ export default function Login() {
             </p>
           </div>
 
+          {/* Show alert if redirected from QR scan */}
+          {hasAttendanceScan && (
+            <Alert className="bg-primary/10 border-primary/20">
+              <QrCode className="h-4 w-4 text-primary" />
+              <AlertDescription className="text-primary">
+                <strong>Attendance QR Code Detected!</strong><br />
+                Please sign in with your student account to record your attendance.
+              </AlertDescription>
+            </Alert>
+          )}
+
           <Tabs 
             defaultValue="student" 
             value={activeTab} 
@@ -102,11 +142,11 @@ export default function Login() {
                   name="identifier"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Email or Username</FormLabel>
+                      <FormLabel>Email or ID Number</FormLabel>
                       <FormControl>
                         <div className="relative">
                           <User className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                          <Input className="pl-9 h-11" placeholder="Email or Username" {...field} />
+                          <Input className="pl-9 h-11" placeholder="Email or ID Number" {...field} />
                         </div>
                       </FormControl>
                       <FormMessage />
@@ -145,6 +185,13 @@ export default function Login() {
                     "Sign In"
                   )}
                 </Button>
+                <div className="text-center">
+                  <Link href="/forgot-password">
+                    <Button variant="ghost" type="button" className="text-sm text-muted-foreground hover:text-primary">
+                      Forgot your password?
+                    </Button>
+                  </Link>
+                </div>
               </form>
             </Form>
           </Tabs>

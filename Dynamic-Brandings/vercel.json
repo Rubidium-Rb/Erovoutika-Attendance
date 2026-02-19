@@ -1,0 +1,14 @@
+{
+  "version": 2,
+  "buildCommand": "npm run build:client",
+  "outputDirectory": "dist",
+  "framework": null,
+  "routes": [
+    { "src": "/api/login", "dest": "/api/login.ts" },
+    { "src": "/api/logout", "dest": "/api/logout.ts" },
+    { "src": "/api/users/([^/]+)", "dest": "/api/users/[id].ts?id=$1" },
+    { "src": "/api/users", "dest": "/api/users/index.ts" },
+    { "handle": "filesystem" },
+    { "src": "/(.*)", "dest": "/index.html" }
+  ]
+}

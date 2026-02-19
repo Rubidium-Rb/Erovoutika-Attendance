@@ -7,7 +7,7 @@ import { relations } from "drizzle-orm";
 
 export const users = pgTable("users", {
   id: serial("id").primaryKey(),
-  username: text("username").notNull().unique(),
+  idNumber: text("id_number").notNull().unique(),
   email: text("email").notNull().unique(),
   password: text("password").notNull(),
   fullName: text("full_name").notNull(),
@@ -56,6 +56,22 @@ export const schedules = pgTable("schedules", {
   startTime: text("start_time").notNull(), // Format: "HH:mm" e.g., "09:00"
   endTime: text("end_time").notNull(), // Format: "HH:mm" e.g., "10:30"
   room: text("room").notNull(),
+});
+
+export const passwordResetTokens = pgTable("password_reset_tokens", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").references(() => users.id).notNull(),
+  token: text("token").notNull().unique(),
+  expiresAt: timestamp("expires_at").notNull(),
+  usedAt: timestamp("used_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const systemSettings = pgTable("system_settings", {
+  id: serial("id").primaryKey(),
+  key: text("key").notNull().unique(),
+  value: text("value").notNull(),
+  updatedAt: timestamp("updated_at").defaultNow(),
 });
 
 // === RELATIONS ===
@@ -125,11 +141,18 @@ export type Enrollment = typeof enrollments.$inferSelect;
 export type Attendance = typeof attendance.$inferSelect;
 export type QrCode = typeof qrCodes.$inferSelect;
 export type Schedule = typeof schedules.$inferSelect;
+
+// Insert types
+export type InsertUser = z.infer<typeof insertUserSchema>;
+export type InsertSubject = z.infer<typeof insertSubjectSchema>;
+export type InsertEnrollment = z.infer<typeof insertEnrollmentSchema>;
+export type InsertAttendance = z.infer<typeof insertAttendanceSchema>;
+export type InsertQrCode = z.infer<typeof insertQrCodeSchema>;
 export type InsertSchedule = z.infer<typeof insertScheduleSchema>;
 
 // Request types
 export type LoginRequest = {
-  identifier: string; // email or username
+  identifier: string; // email or ID number
   password: string;
   role: "student" | "teacher" | "superadmin";
 };

@@ -1,20 +1,35 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, buildUrl, type CreateUserRequest, type User } from "@shared/routes";
+import { type CreateUserRequest, type User } from "@shared/schema";
 import { useToast } from "@/hooks/use-toast";
+import { supabase } from "@/lib/supabase";
+
+// Helper to map database row (snake_case) to User type (camelCase)
+function mapDbRowToUser(row: any): User {
+  return {
+    id: row.id,
+    idNumber: row.id_number,
+    email: row.email,
+    password: "",
+    fullName: row.full_name,
+    role: row.role,
+    profilePicture: row.profile_picture,
+    createdAt: row.created_at ? new Date(row.created_at) : null,
+  };
+}
 
 export function useUsers(role?: "student" | "teacher" | "superadmin") {
-  const queryKey = [api.users.list.path, role];
+  const queryKey = ["users", role];
   
   return useQuery({
     queryKey,
     queryFn: async () => {
-      let url = api.users.list.path;
+      let query = supabase.from("users").select("id, id_number, email, full_name, role, profile_picture, created_at");
       if (role) {
-        url += `?role=${role}`;
+        query = query.eq("role", role);
       }
-      const res = await fetch(url);
-      if (!res.ok) throw new Error("Failed to fetch users");
-      return api.users.list.responses[200].parse(await res.json());
+      const { data, error } = await query;
+      if (error) throw new Error("Failed to fetch users");
+      return (data || []).map(mapDbRowToUser);
     },
   });
 }
@@ -25,21 +40,24 @@ export function useCreateUser() {
 
   return useMutation({
     mutationFn: async (data: CreateUserRequest) => {
-      const validated = api.users.create.input.parse(data);
-      const res = await fetch(api.users.create.path, {
-        method: api.users.create.method,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(validated),
+      // Use the server API to create users - this ensures they're added to both
+      // the users table AND Supabase Auth (using admin privileges)
+      const response = await fetch('/api/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(data),
       });
       
-      if (!res.ok) {
-        const error = await res.json();
-        throw new Error(error.message || "Failed to create user");
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.message || 'Failed to create user');
       }
-      return api.users.create.responses[201].parse(await res.json());
+      
+      return await response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [api.users.list.path] });
+      queryClient.invalidateQueries({ queryKey: ["users"] });
       toast({ title: "User Created", description: "New user account has been successfully created." });
     },
     onError: (err) => {
@@ -58,16 +76,28 @@ export function useDeleteUser() {
 
   return useMutation({
     mutationFn: async (id: number) => {
-      const url = buildUrl(api.users.delete.path, { id });
-      const res = await fetch(url, {
-        method: api.users.delete.method,
+      // Use server API to delete - this ensures deletion from both
+      // users table AND Supabase Auth
+      const response = await fetch(`/api/users/${id}`, {
+        method: 'DELETE',
+        credentials: 'include',
       });
       
-      if (!res.ok) throw new Error("Failed to delete user");
+      if (!response.ok && response.status !== 204) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.message || "Failed to delete user");
+      }
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [api.users.list.path] });
-      toast({ title: "User Deleted", description: "The user account has been removed." });
+      queryClient.invalidateQueries({ queryKey: ["users"] });
+      toast({ title: "User Deleted", description: "The user account has been removed from all systems." });
+    },
+    onError: (err) => {
+      toast({ 
+        title: "Error", 
+        description: err.message, 
+        variant: "destructive" 
+      });
     },
   });
 }
@@ -78,21 +108,24 @@ export function useUpdateUser() {
 
   return useMutation({
     mutationFn: async ({ id, data }: { id: number; data: Partial<CreateUserRequest> }) => {
-      const url = buildUrl(api.users.update.path, { id });
-      const res = await fetch(url, {
-        method: api.users.update.method,
-        headers: { "Content-Type": "application/json" },
+      // Use server API to update - this ensures updates to both
+      // users table AND Supabase Auth
+      const response = await fetch(`/api/users/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify(data),
       });
       
-      if (!res.ok) {
-        const error = await res.json();
-        throw new Error(error.message || "Failed to update user");
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.message || "Failed to update user");
       }
-      return api.users.update.responses[200].parse(await res.json());
+      
+      return await response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [api.users.list.path] });
+      queryClient.invalidateQueries({ queryKey: ["users"] });
       toast({ title: "User Updated", description: "User account has been successfully updated." });
     },
     onError: (err) => {
